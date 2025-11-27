@@ -5,7 +5,7 @@ TMX Map Explorer - Main Application
 import time
 from pathlib import Path
 from collections import defaultdict
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import pygame
 
@@ -14,6 +14,7 @@ from .camera import Camera
 from .renderer.opengl_renderer import OpenGLRenderer
 from .map.structure import Map3DStructure
 from .map.tileset_renderer import TilesetRenderer
+from .entities import EntityManager, Character
 
 DARK_GRAY = (64, 64, 64)
 
@@ -39,6 +40,7 @@ class TMXExplorer:
         # Initialize components
         self.tileset_renderer = TilesetRenderer(tmx_map, source_path, self.renderer)
         self.map_3d = Map3DStructure(tmx_map)
+        self.entity_manager = EntityManager()
         
         print(f"\nTotal textures cached: {len(self.renderer.texture_cache)}")
 
@@ -70,9 +72,39 @@ class TMXExplorer:
 
         # Profiling
         self.frame_times = {k: [] for k in ['collect', 'render', 'grid', 'ui', 'total']}
+        
+        # Delta time tracking
+        self.last_time = time.perf_counter()
 
         print("\n=== Ready! ===")
         print("Press 'P' to toggle profiling")
+
+    def add_character(
+        self,
+        spritesheet_path: str,
+        x: float = 0.0,
+        y: float = 0.0,
+        z: int = 0,
+        speed: float = 100.0,
+        is_player: bool = False
+    ) -> Character:
+        """
+        Add a character to the scene.
+        
+        Args:
+            spritesheet_path: Path to 4x4 spritesheet
+            x, y: World position (bottom-center anchor)
+            z: Height level
+            speed: Movement speed in pixels/second
+            is_player: If True, this character responds to player input
+        
+        Returns:
+            The created Character instance
+        """
+        return self.entity_manager.create_character(
+            spritesheet_path, x, y, z, speed,
+            is_player=is_player
+        )
 
     def _adjust_camera_for_all_levels(self):
         """Adjust camera to show all visible levels"""
@@ -107,10 +139,10 @@ class TMXExplorer:
                 self._handle_mouse_motion(event)
             elif event.type == pygame.KEYDOWN:
                 self._handle_key_down(event)
+            elif event.type == pygame.KEYUP:
+                self._handle_key_up(event)
             elif event.type == pygame.MOUSEWHEEL:
                 self._handle_mouse_wheel(event)
-
-        self._handle_continuous_input()
 
     def _handle_resize(self, width: int, height: int):
         self.screen_width = width
@@ -137,6 +169,7 @@ class TMXExplorer:
             self.camera.y = self.pan_start_camera[1] - dy / self.camera.zoom
 
     def _handle_key_down(self, event):
+        """Key pressed"""
         if event.key in (pygame.K_ESCAPE, pygame.K_q):
             self.running = False
         elif event.key == pygame.K_SPACE:
@@ -159,6 +192,48 @@ class TMXExplorer:
             self._handle_zoom_key(event, 1.2)
         elif event.key == pygame.K_MINUS:
             self._handle_zoom_key(event, 1/1.2)
+        # Movement
+        elif event.key in (pygame.K_UP, pygame.K_w):
+            self._update_player_velocity(dy=-1)
+        elif event.key in (pygame.K_DOWN, pygame.K_s):
+            self._update_player_velocity(dy=1)
+        elif event.key in (pygame.K_LEFT, pygame.K_a):
+            self._update_player_velocity(dx=-1)
+        elif event.key in (pygame.K_RIGHT, pygame.K_d):
+            self._update_player_velocity(dx=1)
+
+    def _handle_key_up(self, event):
+        """Key released"""
+        if event.key in (pygame.K_UP, pygame.K_w):
+            self._update_player_velocity(dy=0, reset_y=True)
+        elif event.key in (pygame.K_DOWN, pygame.K_s):
+            self._update_player_velocity(dy=0, reset_y=True)
+        elif event.key in (pygame.K_LEFT, pygame.K_a):
+            self._update_player_velocity(dx=0, reset_x=True)
+        elif event.key in (pygame.K_RIGHT, pygame.K_d):
+            self._update_player_velocity(dx=0, reset_x=True)
+
+    def _update_player_velocity(self, dx=None, dy=None, reset_x=False, reset_y=False):
+        """Update player velocity based on key events"""
+        player = self.entity_manager.player
+        if player is None:
+            return
+        
+        # Get current direction from velocity
+        current_dx = 1 if player.velocity_x > 0 else (-1 if player.velocity_x < 0 else 0)
+        current_dy = 1 if player.velocity_y > 0 else (-1 if player.velocity_y < 0 else 0)
+        
+        if reset_x:
+            current_dx = 0
+        elif dx is not None:
+            current_dx = dx
+            
+        if reset_y:
+            current_dy = 0
+        elif dy is not None:
+            current_dy = dy
+        
+        player.move(current_dx, current_dy)
 
     def _change_height(self, delta: int):
         old_z = self.current_z
@@ -179,19 +254,6 @@ class TMXExplorer:
     def _handle_mouse_wheel(self, event):
         factor = 1.1 if event.y > 0 else 1/1.1
         self.camera.zoom_by(factor)
-
-    def _handle_continuous_input(self):
-        keys = pygame.key.get_pressed()
-        move_speed = 10 / self.camera.zoom
-        
-        if keys[pygame.K_LEFT] or keys[pygame.K_a]:
-            self.camera.move(-move_speed, 0)
-        if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
-            self.camera.move(move_speed, 0)
-        if keys[pygame.K_UP] or keys[pygame.K_w]:
-            self.camera.move(0, -move_speed)
-        if keys[pygame.K_DOWN] or keys[pygame.K_s]:
-            self.camera.move(0, move_speed)
 
     def collect_visible_tiles_ordered(self) -> Dict:
         """Collect visible tiles with culling and depth ordering"""
@@ -311,6 +373,10 @@ class TMXExplorer:
         t2 = time.perf_counter()
 
         self.renderer.draw_batched_tiles(tile_batches)
+        
+        # Draw characters
+        self._draw_characters()
+        
         t3 = time.perf_counter()
 
         self.draw_grid()
@@ -332,11 +398,40 @@ class TMXExplorer:
                 if len(self.frame_times[key]) > 120:
                     self.frame_times[key].pop(0)
 
+    def _draw_characters(self):
+        """Draw all characters with proper depth sorting"""
+        char_data = self.entity_manager.collect_render_data(
+            self.renderer,
+            self.level_height_offset
+        )
+        
+        if not char_data:
+            return
+        
+        # Group by texture and draw
+        char_batches = defaultdict(list)
+        for texture, x, y, w, h, depth in char_data:
+            char_batches[texture].append((x, y, w, h, depth))
+        
+        self.renderer.draw_batched_tiles(char_batches)
+
     def run(self):
         """Main application loop"""
         while self.running:
+            # Calculate delta time
+            current_time = time.perf_counter()
+            dt = current_time - self.last_time
+            self.last_time = current_time
+            
+            # 1. Process events
             self.handle_events()
+            
+            # 2. Update entities
+            self.entity_manager.update(dt)
+            
+            # 3. Render
             self.draw()
+            
             self.clock.tick(60)
-
+        
         pygame.quit()
