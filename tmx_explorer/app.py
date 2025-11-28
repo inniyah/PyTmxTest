@@ -154,16 +154,6 @@ class TMXExplorer:
         """Handle single-press key actions"""
         if key == glfw.KEY_ESCAPE:
             self.running = False
-        elif key == glfw.KEY_Q:
-            # Bajar nivel del personaje
-            if self.entity_manager.player:
-                self.entity_manager.player.z = max(0, self.entity_manager.player.z - 1)
-                print(f"Player Z: {self.entity_manager.player.z}")
-        elif key == glfw.KEY_E:
-            # Subir nivel del personaje
-            if self.entity_manager.player:
-                self.entity_manager.player.z = min(self.map_3d.H - 1, self.entity_manager.player.z + 1)
-                print(f"Player Z: {self.entity_manager.player.z}")
         elif key == glfw.KEY_SPACE:
             self.camera.reset(
                 self.map_3d.map_width, self.map_3d.map_height,
@@ -238,7 +228,7 @@ class TMXExplorer:
         if player is None:
             return
         
-        dx, dy = 0, 0
+        dx, dy, dz = 0, 0, 0
         
         if glfw.KEY_W in self.pressed_keys or glfw.KEY_UP in self.pressed_keys:
             dy = -1
@@ -249,15 +239,21 @@ class TMXExplorer:
         if glfw.KEY_D in self.pressed_keys or glfw.KEY_RIGHT in self.pressed_keys:
             dx = 1
         
+        # Subir/bajar con Q/E
+        if glfw.KEY_Q in self.pressed_keys:
+            dz = -1
+        if glfw.KEY_E in self.pressed_keys:
+            dz = 1
+        
         # Camera movement with shift
         if glfw.KEY_LEFT_SHIFT in self.pressed_keys or glfw.KEY_RIGHT_SHIFT in self.pressed_keys:
             camera_speed = 500
             dt = 1/60
             self.camera.x += dx * camera_speed * dt / self.camera.zoom
             self.camera.y += dy * camera_speed * dt / self.camera.zoom
-            player.move(0, 0)
+            player.move(0, 0, 0)
         else:
-            player.move(dx, dy)
+            player.move(dx, dy, dz)
 
     def collect_visible_tiles_ordered(self) -> Dict:
         """Collect visible tiles with culling and depth ordering"""

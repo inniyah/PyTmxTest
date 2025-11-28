@@ -14,17 +14,18 @@ class Character:
     """Character entity with proper depth sorting"""
     
     def __init__(self, sprite: AnimatedSprite,
-                 x: float = 0.0, y: float = 0.0, z: int = 0,
+                 x: float = 0.0, y: float = 0.0, z: float = 0.0,
                  speed: float = 100.0,
-                 tile_height: int = 32):  # <-- NUEVO: recibe tile_height del mapa
+                 tile_height: int = 32):
         self.sprite = sprite
         self.x = x
         self.y = y
-        self.z = z
+        self.z = z  # Ahora es float para movimiento suave
         self.speed = speed
-        self.tile_height = tile_height  # <-- Guardar para cálculo de depth
+        self.tile_height = tile_height
         self.velocity_x = 0.0
         self.velocity_y = 0.0
+        self.velocity_z = 0.0  # Velocidad vertical
         
         self._texture_cache: Dict[Tuple[Direction, int], 'Texture'] = {}
         self._textures_initialized = False
@@ -48,6 +49,10 @@ class Character:
             self.y += self.velocity_y * dt
             self._update_direction()
         
+        # Movimiento vertical (Z)
+        if self.velocity_z != 0:
+            self.z += self.velocity_z * dt
+        
         self.sprite.set_walking(is_moving)
         self.sprite.update(dt)
 
@@ -63,19 +68,23 @@ class Character:
             else:
                 self.sprite.set_direction(Direction.LEFT)
 
-    def move(self, dx: float, dy: float):
+    def move(self, dx: float, dy: float, dz: float = 0.0):
+        """Establecer velocidad de movimiento en X, Y, Z"""
+        # Movimiento horizontal
         if dx == 0 and dy == 0:
             self.velocity_x = 0
             self.velocity_y = 0
-            return
+        else:
+            if dx != 0 and dy != 0:
+                factor = 0.7071
+                dx *= factor
+                dy *= factor
+            
+            self.velocity_x = dx * self.speed
+            self.velocity_y = dy * self.speed
         
-        if dx != 0 and dy != 0:
-            factor = 0.7071
-            dx *= factor
-            dy *= factor
-        
-        self.velocity_x = dx * self.speed
-        self.velocity_y = dy * self.speed
+        # Movimiento vertical (más lento, 0.5x velocidad horizontal)
+        self.velocity_z = dz * self.speed * 0.01  # Escala reducida para Z
 
     def get_render_position(self) -> tuple:
         """Posición de renderizado (esquina superior izquierda del sprite)"""
