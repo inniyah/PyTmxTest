@@ -1,9 +1,9 @@
 """
-Entity system for characters and animated sprites
+Entity system for characters and NPCs
 """
 
 from .sprite import AnimatedSprite, Direction, AnimationState
-from .character import Character
+from .character import Character, NPCBehavior
 from .manager import EntityManager
 
 __all__ = [
@@ -11,5 +11,6 @@ __all__ = [
     "Direction", 
     "AnimationState",
     "Character",
+    "NPCBehavior",
     "EntityManager",
 ]

@@ -60,6 +60,7 @@ def main():
         start_x = explorer.map_3d.map_width * explorer.map_3d.tile_width / 2
         start_y = explorer.map_3d.map_height * explorer.map_3d.tile_height / 2
         
+        # Crear jugador
         player = explorer.add_character(
             sprite_path,
             x=start_x,
@@ -70,6 +71,58 @@ def main():
         )
         print(f"\nPersonaje creado en ({start_x:.0f}, {start_y:.0f})")
         print("Usa WASD o flechas para mover el personaje")
+        
+        # Crear NPCs de ejemplo usando diferentes sprites
+        npc_sprites = [
+            "assets/people/gal.png",
+            "assets/people/kid.png",
+            "assets/people/fat.png",
+        ]
+        
+        # Filtrar solo los que existen
+        available_sprites = [s for s in npc_sprites if Path(s).exists()]
+        
+        if available_sprites:
+            print(f"\nCreando NPCs con {len(available_sprites)} sprites disponibles...")
+            
+            # NPC que sigue al jugador
+            follower = explorer.entity_manager.create_npc_follower(
+                available_sprites[0],
+                target=player,
+                x=start_x + 100,
+                y=start_y + 100,
+                speed=120.0
+            )
+            print(f"  - Follower NPC creado")
+            
+            # NPCs que vagabundean cerca del jugador
+            for i, sprite in enumerate(available_sprites):
+                offset_x = (i - len(available_sprites)//2) * 300
+                npc = explorer.entity_manager.create_npc_wanderer(
+                    sprite,
+                    x=start_x + offset_x,
+                    y=start_y + 200,
+                    radius=250.0,
+                    speed=50.0 + i * 10
+                )
+                print(f"  - Wanderer NPC {i+1} creado")
+            
+            # NPC que patrulla en un rectángulo
+            if len(available_sprites) > 1:
+                patrol_points = [
+                    (start_x - 200, start_y - 200),
+                    (start_x + 200, start_y - 200),
+                    (start_x + 200, start_y + 200),
+                    (start_x - 200, start_y + 200),
+                ]
+                patrol_npc = explorer.entity_manager.create_npc_patrol(
+                    available_sprites[1],
+                    patrol_points=patrol_points,
+                    speed=80.0
+                )
+                print(f"  - Patrol NPC creado")
+            
+            print(f"\nTotal NPCs: {explorer.entity_manager.npc_count}")
     elif sprite_path:
         print(f"Advertencia: No se encuentra el spritesheet '{sprite_path}'")
     

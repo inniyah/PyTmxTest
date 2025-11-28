@@ -1,14 +1,10 @@
 """
-Animated sprite system for character spritesheets
-
-Spritesheet format (4x4 grid):
-- Columns: 0=idle, 1-3=walk animation
-- Rows: 0=down, 1=left, 2=up, 3=right
+Animated sprite system using PIL
 """
 
 from PIL import Image
 from enum import IntEnum
-from typing import List, Dict
+from typing import List, Dict, Optional
 from pathlib import Path
 
 
@@ -27,7 +23,7 @@ class AnimationState(IntEnum):
 
 
 class AnimatedSprite:
-    """Animated sprite from a 4x4 spritesheet (PIL version)"""
+    """Animated sprite from a 4x4 spritesheet"""
     
     COLS = 4
     ROWS = 4
@@ -57,6 +53,27 @@ class AnimatedSprite:
         
         print(f"Loaded spritesheet: {Path(spritesheet_path).name} "
               f"({self.frame_width}x{self.frame_height} per frame)")
+
+    @classmethod
+    def from_cached(cls, cached_sprite: 'AnimatedSprite', 
+                    animation_speed: float = 8.0) -> 'AnimatedSprite':
+        """Create new instance sharing frames with cached sprite"""
+        instance = object.__new__(cls)
+        
+        # Compartir frames (no copiar - son inmutables)
+        instance.frames = cached_sprite.frames
+        instance.frame_width = cached_sprite.frame_width
+        instance.frame_height = cached_sprite.frame_height
+        instance.spritesheet = cached_sprite.spritesheet
+        
+        # Estado propio de animación (cada personaje independiente)
+        instance.animation_speed = animation_speed
+        instance.animation_timer = 0.0
+        instance.current_frame = 0
+        instance.direction = Direction.DOWN
+        instance.state = AnimationState.IDLE
+        
+        return instance
 
     def _cut_frames(self):
         """Pre-cut all frames from spritesheet"""
