@@ -1,8 +1,3 @@
-
-
-# ============================================
-# tmx_explorer/shaders/__init__.py
-# ============================================
 """GLSL shader sources"""
 
 from .sources import (

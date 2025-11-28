@@ -1,13 +1,13 @@
 """
-OpenGL-based renderer for TMX maps
+OpenGL-based renderer for TMX maps (GLFW version - uses PIL for images)
 """
 
 import ctypes
 import numpy as np
-import pygame
 from OpenGL.GL import *
 from OpenGL.GL.shaders import compileProgram, compileShader
 from typing import Dict, List, Tuple, Optional
+from PIL import Image
 
 from .texture import Texture
 from .sprite_batch import SpriteBatch
@@ -20,29 +20,17 @@ WHITE = (255, 255, 255)
 
 
 class OpenGLRenderer:
-    """Ultra-optimized OpenGL renderer for tile maps"""
+    """OpenGL renderer for tile maps (GLFW/PIL version)"""
 
     def __init__(self, screen_width: int, screen_height: int):
         self.screen_width = screen_width
         self.screen_height = screen_height
         
-        self._init_display()
         self._init_shaders()
         self._init_buffers()
         self._init_state()
-
-    def _init_display(self):
-        """Initialize pygame display with OpenGL context"""
-        pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
-        pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MINOR_VERSION, 3)
-        pygame.display.gl_set_attribute(pygame.GL_CONTEXT_PROFILE_MASK,
-                                       pygame.GL_CONTEXT_PROFILE_CORE)
-        pygame.display.gl_set_attribute(pygame.GL_DOUBLEBUFFER, 1)
-
-        self.screen = pygame.display.set_mode(
-            (self.screen_width, self.screen_height),
-            pygame.DOUBLEBUF | pygame.OPENGL | pygame.RESIZABLE
-        )
+        
+        # Print OpenGL info
         print(f"OpenGL Renderer: {glGetString(GL_VERSION).decode()}")
 
     def _init_shaders(self):
@@ -92,11 +80,10 @@ class OpenGLRenderer:
         glDisable(GL_CULL_FACE)
         
         self.texture_cache: Dict[int, Texture] = {}
-        self.font = pygame.font.Font(None, 18)
         
-        # UI texture cache
-        self.ui_panel_texture: Optional[Texture] = None
-        self.ui_panel_cache_key = ""
+        # Text rendering cache
+        self._text_texture: Optional[Texture] = None
+        self._text_cache_key = ""
 
     def _ortho_matrix(self, left: float, right: float, bottom: float, 
                       top: float, near: float, far: float) -> np.ndarray:
@@ -117,17 +104,10 @@ class OpenGLRenderer:
             0, self.screen_width, self.screen_height, 0, -10000, 10000
         )
 
-    def get_or_create_texture(self, surface: pygame.Surface) -> Texture:
-        """Get texture from cache or create new one"""
-        surf_id = id(surface)
-        if surf_id not in self.texture_cache:
-            self.texture_cache[surf_id] = Texture(surface)
-        return self.texture_cache[surf_id]
-
-    def preload_texture(self, gid: int, surface: pygame.Surface) -> Texture:
-        """Pre-load texture with specific GID"""
+    def preload_texture(self, gid: int, image: Image.Image) -> Texture:
+        """Pre-load texture with specific GID from PIL Image"""
         if gid not in self.texture_cache:
-            self.texture_cache[gid] = Texture(surface)
+            self.texture_cache[gid] = Texture.from_pil(image)
         return self.texture_cache[gid]
 
     def set_camera(self, x: float, y: float, zoom: float):
@@ -140,23 +120,6 @@ class OpenGLRenderer:
         """Start a new frame"""
         glClearColor(0.0, 0.0, 0.0, 1.0)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-
-    def end_frame(self):
-        """End current frame and swap buffers"""
-        pygame.display.flip()
-
-    def draw_sprite_immediate(self, texture: Texture, x: float, y: float, 
-                              w: float, h: float):
-        """Draw sprite immediately (for UI elements)"""
-        glUseProgram(self.shader_program)
-        glUniformMatrix4fv(self.proj_loc, 1, GL_FALSE, self.projection.T)
-        glUniform1i(self.tex_loc, 0)
-        
-        self.batch.begin(texture)
-        self.batch.add_sprite(x, y, w, h)
-        self.batch.flush()
-        
-        glUseProgram(0)
 
     def draw_batched_tiles(self, tile_batches: Dict[Texture, List[Tuple]]):
         """Draw all tiles grouped by texture with depth"""
@@ -208,37 +171,50 @@ class OpenGLRenderer:
         glBindVertexArray(0)
         glUseProgram(0)
 
-    def draw_ui_panel(self, text_lines: List[str], x: int, y: int):
-        """Draw UI panel with cached texture"""
+    def draw_text_lines(self, text_lines: List[str], x: int, y: int):
+        """Draw text using PIL-rendered texture"""
         cache_key = "|".join(text_lines)
-
-        if cache_key != self.ui_panel_cache_key:
-            texts = [self.font.render(text, True, WHITE) for text in text_lines]
+        
+        if cache_key != self._text_cache_key:
+            # Render text to PIL image
+            from PIL import ImageDraw, ImageFont
             
-            max_width = max(s.get_width() for s in texts)
-            total_height = sum(s.get_height() + 2 for s in texts)
+            try:
+                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 14)
+            except:
+                font = ImageFont.load_default()
             
-            panel_width = max_width + 16
-            panel_height = total_height + 8
-            panel_surface = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
-            panel_surface.fill((0, 0, 0, 180))
-
-            y_offset = 4
-            for surf in texts:
-                panel_surface.blit(surf, (8, y_offset))
-                y_offset += surf.get_height() + 2
-
-            if self.ui_panel_texture:
-                del self.ui_panel_texture
-
-            self.ui_panel_texture = Texture(panel_surface)
-            self.ui_panel_cache_key = cache_key
-
-        self.draw_sprite_immediate(
-            self.ui_panel_texture, x, y,
-            self.ui_panel_texture.width,
-            self.ui_panel_texture.height
-        )
+            # Calculate size
+            line_height = 18
+            max_width = 400
+            total_height = len(text_lines) * line_height + 10
+            
+            # Create image
+            img = Image.new('RGBA', (max_width, total_height), (0, 0, 0, 180))
+            draw = ImageDraw.Draw(img)
+            
+            for i, line in enumerate(text_lines):
+                draw.text((5, 5 + i * line_height), line, font=font, fill=(255, 255, 255, 255))
+            
+            # Create texture
+            self._text_texture = Texture.from_pil(img, add_border=False)
+            self._text_cache_key = cache_key
+        
+        if self._text_texture:
+            # Draw the text texture
+            glUseProgram(self.shader_program)
+            glUniformMatrix4fv(self.proj_loc, 1, GL_FALSE, self.projection.T)
+            glUniform1i(self.tex_loc, 0)
+            
+            glDisable(GL_DEPTH_TEST)
+            
+            self.batch.begin(self._text_texture)
+            self.batch.add_sprite(x, y, self._text_texture.width, self._text_texture.height, 
+                                  depth=9999, border=0)
+            self.batch.flush()
+            
+            glEnable(GL_DEPTH_TEST)
+            glUseProgram(0)
 
     def resize(self, width: int, height: int):
         """Handle window resize"""

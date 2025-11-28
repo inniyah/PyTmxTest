@@ -2,7 +2,6 @@
 Camera system for 2D map navigation
 """
 
-
 class Camera:
     """2D camera with pan and zoom capabilities"""
     

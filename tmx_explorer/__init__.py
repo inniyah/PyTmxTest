@@ -1,14 +1,8 @@
-# ============================================
-# tmx_explorer/__init__.py
-# ============================================
 """
-TMX Map Explorer - OpenGL-based TMX map viewer
+TMX Map Explorer - GLFW/OpenGL version
 
-Optimized features:
-- 2D culling (X/Y only, all Z heights visible)
-- Layer-by-layer rendering: Y (far→near), X (left→right), Z (bottom→top), N (0→max)
-- Tile bleeding prevention with NEAREST filtering and edge extrusion
-- Animated character sprites with 4x4 spritesheets
+Requisitos:
+    pip install glfw PyOpenGL PyOpenGL_accelerate pillow numpy
 """
 
 from .app import TMXExplorer
@@ -23,7 +17,7 @@ from .entities import (
     Character, EntityManager
 )
 
-__version__ = "1.1.0"
+__version__ = "2.0.0"
 __all__ = [
     "TMXExplorer",
     "Camera", 

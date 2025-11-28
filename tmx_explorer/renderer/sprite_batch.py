@@ -1,5 +1,5 @@
 """
-Batched sprite rendering for efficient tile drawing
+Batched sprite rendering for efficient tile drawing (GLFW version)
 """
 
 import ctypes
@@ -10,7 +10,7 @@ from .texture import Texture
 
 
 class SpriteBatch:
-    """Efficient batched sprite renderer with UV inset fix"""
+    """Efficient batched sprite renderer"""
     
     FLOATS_PER_VERTEX = 9  # x, y, u, v, r, g, b, a, depth
     VERTICES_PER_SPRITE = 4
@@ -78,14 +78,14 @@ class SpriteBatch:
         x: float, y: float,
         width: float, height: float,
         depth: float = 0.0,
-        color: Tuple[float, float, float, float] = (1, 1, 1, 1)
+        color: Tuple[float, float, float, float] = (1, 1, 1, 1),
+        border: int = 1
     ) -> bool:
         """Add a sprite to the current batch. Returns False if batch is full."""
         if self.sprite_count >= self.max_sprites:
             return False
 
-        # Account for 1px border in texture (for tile bleeding fix)
-        border = 1.0
+        # Account for border in texture (for tile bleeding fix)
         total_width = width + border * 2
         total_height = height + border * 2
 
@@ -99,10 +99,11 @@ class SpriteBatch:
         r, g, b, a = color
 
         # Top-left, Top-right, Bottom-right, Bottom-left
-        self.vertices[idx:idx+9] = [x, y, u_min, v_min, r, g, b, a, depth]
-        self.vertices[idx+9:idx+18] = [x + width, y, u_max, v_min, r, g, b, a, depth]
-        self.vertices[idx+18:idx+27] = [x + width, y + height, u_max, v_max, r, g, b, a, depth]
-        self.vertices[idx+27:idx+36] = [x, y + height, u_min, v_max, r, g, b, a, depth]
+        # Note: v is flipped because texture was flipped during load
+        self.vertices[idx:idx+9] = [x, y, u_min, v_max, r, g, b, a, depth]
+        self.vertices[idx+9:idx+18] = [x + width, y, u_max, v_max, r, g, b, a, depth]
+        self.vertices[idx+18:idx+27] = [x + width, y + height, u_max, v_min, r, g, b, a, depth]
+        self.vertices[idx+27:idx+36] = [x, y + height, u_min, v_min, r, g, b, a, depth]
 
         self.sprite_count += 1
         return True

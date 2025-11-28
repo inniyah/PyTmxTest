@@ -1,6 +1,3 @@
-# ============================================
-# tmx_explorer/map/__init__.py
-# ============================================
 """Map structure and tileset management"""
 
 from .structure import Map3DStructure

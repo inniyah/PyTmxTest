@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 """
 TMX Map Explorer - OpenGL Viewer for Tiled Maps
 

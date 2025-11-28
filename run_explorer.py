@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-TMX Explorer - Visor de mapas TMX con personajes
+TMX Explorer - GLFW Version
 
 Uso:
     python run_explorer.py <archivo.tmx> [spritesheet.png]
     
 Ejemplo:
-    python run_explorer.py mapas/mi_mapa.tmx sprites/player.png
+    python run_explorer.py map01/VTiles1.tmx assets/people/guy.png
     
 Controles:
-    WASD/Flechas - Mover personaje (si hay) o cámara
-    Shift+WASD   - Mover cámara (cuando hay personaje)
+    WASD/Flechas - Mover personaje
+    Shift+WASD   - Mover cámara
     Rueda ratón  - Zoom
     Arrastrar    - Pan cámara
     PgUp/PgDn    - Cambiar nivel de altura
@@ -18,12 +18,16 @@ Controles:
     I            - Mostrar/ocultar info
     P            - Mostrar/ocultar profiling
     ESC/Q        - Salir
+
+Requisitos:
+    pip install glfw PyOpenGL PyOpenGL_accelerate pillow numpy
 """
 
 import sys
 from pathlib import Path
 
-from tmx_explorer import TMXExplorer
+# Importar GLFW version
+from tmx_explorer.app import TMXExplorer
 
 
 def main():
@@ -44,10 +48,8 @@ def main():
     if len(sys.argv) >= 3:
         sprite_path = sys.argv[2]
     else:
-        # Buscar spritesheet por defecto en ubicaciones comunes
-        default_paths = [
-            "assets/people/guy.png",
-        ]
+        # Buscar spritesheet por defecto
+        default_paths = ["assets/people/guy.png"]
         sprite_path = None
         for path in default_paths:
             if Path(path).exists():
@@ -55,7 +57,6 @@ def main():
                 break
     
     if sprite_path and Path(sprite_path).exists():
-        # Posición inicial en el centro del mapa
         start_x = explorer.map_3d.map_width * explorer.map_3d.tile_width / 2
         start_y = explorer.map_3d.map_height * explorer.map_3d.tile_height / 2
         
@@ -69,7 +70,6 @@ def main():
         )
         print(f"\nPersonaje creado en ({start_x:.0f}, {start_y:.0f})")
         print("Usa WASD o flechas para mover el personaje")
-        print("Shift+WASD para mover la cámara")
     elif sprite_path:
         print(f"Advertencia: No se encuentra el spritesheet '{sprite_path}'")
     
