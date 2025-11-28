@@ -172,36 +172,48 @@ class OpenGLRenderer:
         glUseProgram(0)
 
     def draw_text_lines(self, text_lines: List[str], x: int, y: int):
-        """Draw text using PIL-rendered texture"""
-        cache_key = "|".join(text_lines)
+        """Draw text using PIL-rendered texture (optimized)"""
+        # Solo actualizar cada 10 frames o si cambió el contenido base
+        # (ignoramos FPS que cambia constantemente)
+        base_lines = [l for l in text_lines if not l.startswith("FPS:")]
+        cache_key = "|".join(base_lines)
         
-        if cache_key != self._text_cache_key:
+        self._text_frame_counter = getattr(self, '_text_frame_counter', 0) + 1
+        
+        needs_update = (
+            cache_key != self._text_cache_key or 
+            self._text_texture is None or
+            self._text_frame_counter >= 6  # Actualizar FPS cada 6 frames (~10 Hz)
+        )
+        
+        if needs_update:
+            self._text_frame_counter = 0
+            self._text_cache_key = cache_key
+            
             # Render text to PIL image
             from PIL import ImageDraw, ImageFont
             
-            try:
-                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 14)
-            except:
-                font = ImageFont.load_default()
+            if not hasattr(self, '_cached_font'):
+                try:
+                    self._cached_font = ImageFont.truetype(
+                        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 14)
+                except:
+                    self._cached_font = ImageFont.load_default()
             
-            # Calculate size
             line_height = 18
-            max_width = 400
+            max_width = 350
             total_height = len(text_lines) * line_height + 10
             
-            # Create image
             img = Image.new('RGBA', (max_width, total_height), (0, 0, 0, 180))
             draw = ImageDraw.Draw(img)
             
             for i, line in enumerate(text_lines):
-                draw.text((5, 5 + i * line_height), line, font=font, fill=(255, 255, 255, 255))
+                draw.text((5, 5 + i * line_height), line, font=self._cached_font, 
+                         fill=(255, 255, 255, 255))
             
-            # Create texture
             self._text_texture = Texture.from_pil(img, add_border=False)
-            self._text_cache_key = cache_key
         
         if self._text_texture:
-            # Draw the text texture
             glUseProgram(self.shader_program)
             glUniformMatrix4fv(self.proj_loc, 1, GL_FALSE, self.projection.T)
             glUniform1i(self.tex_loc, 0)
