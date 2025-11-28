@@ -15,6 +15,7 @@ from .renderer.opengl_renderer import OpenGLRenderer
 from .map.structure import Map3DStructure
 from .map.tileset_renderer import TilesetRenderer
 from .entities import EntityManager, Character
+from .gamepad import GamepadManager
 
 DARK_GRAY = (64, 64, 64)
 
@@ -62,6 +63,9 @@ class TMXExplorer:
         self.pressed_keys = set()
         self.mouse_pos = (0, 0)
         self.mouse_buttons = set()
+        
+        # Gamepad support
+        self.gamepad = GamepadManager()
 
         # Initialize renderer
         self.renderer = OpenGLRenderer(self.screen_width, self.screen_height)
@@ -223,13 +227,14 @@ class TMXExplorer:
             self._adjust_camera_for_all_levels()
 
     def _update_player_movement(self):
-        """Update player based on currently pressed keys"""
+        """Update player based on keyboard and gamepad input"""
         player = self.entity_manager.player
         if player is None:
             return
         
-        dx, dy, dz = 0, 0, 0
+        dx, dy, dz = 0.0, 0.0, 0.0
         
+        # Keyboard input
         if glfw.KEY_W in self.pressed_keys or glfw.KEY_UP in self.pressed_keys:
             dy = -1
         if glfw.KEY_S in self.pressed_keys or glfw.KEY_DOWN in self.pressed_keys:
@@ -239,13 +244,30 @@ class TMXExplorer:
         if glfw.KEY_D in self.pressed_keys or glfw.KEY_RIGHT in self.pressed_keys:
             dx = 1
         
-        # Subir/bajar con Q/E
         if glfw.KEY_Q in self.pressed_keys:
             dz = -1
         if glfw.KEY_E in self.pressed_keys:
             dz = 1
         
-        # Camera movement with shift
+        # Gamepad input (se suma/combina con teclado)
+        self.gamepad.update()
+        if self.gamepad.is_connected():
+            gp_dx, gp_dy = self.gamepad.get_movement()
+            gp_dz = self.gamepad.get_height_change()
+            
+            # Usar gamepad si tiene input, sino mantener teclado
+            if abs(gp_dx) > 0.1 or abs(gp_dy) > 0.1:
+                dx, dy = gp_dx, gp_dy
+            if abs(gp_dz) > 0.1:
+                dz = gp_dz
+            
+            # Botones del gamepad
+            if self.gamepad.button_just_pressed('start'):
+                self.show_info = not self.show_info
+            if self.gamepad.button_just_pressed('back'):
+                self.show_grid = not self.show_grid
+        
+        # Camera movement with shift (solo teclado)
         if glfw.KEY_LEFT_SHIFT in self.pressed_keys or glfw.KEY_RIGHT_SHIFT in self.pressed_keys:
             camera_speed = 500
             dt = 1/60
