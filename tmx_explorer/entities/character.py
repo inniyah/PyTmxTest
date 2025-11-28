@@ -11,16 +11,18 @@ if TYPE_CHECKING:
 
 
 class Character:
-    """Character entity in the game world (PIL version)"""
+    """Character entity with proper depth sorting"""
     
     def __init__(self, sprite: AnimatedSprite,
                  x: float = 0.0, y: float = 0.0, z: int = 0,
-                 speed: float = 100.0):
+                 speed: float = 100.0,
+                 tile_height: int = 32):  # <-- NUEVO: recibe tile_height del mapa
         self.sprite = sprite
         self.x = x
         self.y = y
         self.z = z
         self.speed = speed
+        self.tile_height = tile_height  # <-- Guardar para cálculo de depth
         self.velocity_x = 0.0
         self.velocity_y = 0.0
         
@@ -76,13 +78,26 @@ class Character:
         self.velocity_y = dy * self.speed
 
     def get_render_position(self) -> tuple:
+        """Posición de renderizado (esquina superior izquierda del sprite)"""
         render_x = self.x - self.sprite.width / 2
         render_y = self.y - self.sprite.height
         return render_x, render_y
 
     def get_depth(self) -> float:
+        """
+        Calcula la profundidad para z-buffer.
+        
+        Usa la misma fórmula que los tiles:
+        - tiles: depth = base_offset + tile_y + z + (n * 0.1)
+        - character: depth = base_offset + (pixel_y / tile_height) + z + 0.5
+        
+        El +0.5 asegura que el personaje se dibuje después de tiles
+        en la misma fila pero antes de la fila siguiente.
+        """
         base_offset = -1000.0
-        return base_offset + (self.y / 32.0) + self.z + 0.5
+        # Convertir posición Y en píxeles a coordenada de tile
+        tile_y = self.y / self.tile_height
+        return base_offset + tile_y + self.z + 0.5
 
     def get_texture(self, renderer: 'OpenGLRenderer') -> 'Texture':
         if not self._textures_initialized:

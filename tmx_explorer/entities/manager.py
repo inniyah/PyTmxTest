@@ -13,9 +13,10 @@ if TYPE_CHECKING:
 class EntityManager:
     """Manages all characters/entities"""
     
-    def __init__(self):
+    def __init__(self, tile_height: int = 32):  # <-- NUEVO: recibe tile_height
         self.characters: List[Character] = []
         self.player: Optional[Character] = None
+        self.tile_height = tile_height  # <-- Guardar para pasarlo a personajes
         self._sprite_cache = {}
 
     def load_sprite(self, path: str, frame_width: int = None,
@@ -32,7 +33,10 @@ class EntityManager:
                          speed: float = 100.0, frame_width: int = None,
                          frame_height: int = None, is_player: bool = False) -> Character:
         sprite = self.load_sprite(spritesheet_path, frame_width, frame_height)
-        character = Character(sprite, x, y, z, speed)
+        character = Character(
+            sprite, x, y, z, speed,
+            tile_height=self.tile_height  # <-- Pasar tile_height al personaje
+        )
         
         self.characters.append(character)
         if is_player:

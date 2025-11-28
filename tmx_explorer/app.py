@@ -73,7 +73,8 @@ class TMXExplorer:
         # Initialize components
         self.tileset_renderer = TilesetRenderer(tmx_map, source_path, self.renderer)
         self.map_3d = Map3DStructure(tmx_map)
-        self.entity_manager = EntityManager()
+        # Pasar tile_height al EntityManager para depth sorting correcto
+        self.entity_manager = EntityManager(tile_height=self.map_3d.tile_height)
         
         print(f"\nTotal textures cached: {len(self.renderer.texture_cache)}")
 
@@ -110,7 +111,8 @@ class TMXExplorer:
         self.frame_count = 0
 
         print("\n=== Ready! ===")
-        print("WASD/Arrows: Move | Mouse drag: Pan | Wheel: Zoom")
+        print("WASD/Arrows: Move | Q/E: Player height down/up")
+        print("Mouse drag: Pan | Wheel: Zoom | PgUp/PgDn: View height")
         print("G: Grid | I: Info | P: Profiling | ESC: Quit")
 
     def add_character(self, spritesheet_path: str, x: float = 0.0, y: float = 0.0,
@@ -150,8 +152,18 @@ class TMXExplorer:
     
     def _handle_key_action(self, key, mods):
         """Handle single-press key actions"""
-        if key == glfw.KEY_ESCAPE or key == glfw.KEY_Q:
+        if key == glfw.KEY_ESCAPE:
             self.running = False
+        elif key == glfw.KEY_Q:
+            # Bajar nivel del personaje
+            if self.entity_manager.player:
+                self.entity_manager.player.z = max(0, self.entity_manager.player.z - 1)
+                print(f"Player Z: {self.entity_manager.player.z}")
+        elif key == glfw.KEY_E:
+            # Subir nivel del personaje
+            if self.entity_manager.player:
+                self.entity_manager.player.z = min(self.map_3d.H - 1, self.entity_manager.player.z + 1)
+                print(f"Player Z: {self.entity_manager.player.z}")
         elif key == glfw.KEY_SPACE:
             self.camera.reset(
                 self.map_3d.map_width, self.map_3d.map_height,
