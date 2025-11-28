@@ -64,8 +64,8 @@ class TMXExplorer:
         self.mouse_pos = (0, 0)
         self.mouse_buttons = set()
         
-        # Gamepad support
-        self.gamepad = GamepadManager()
+        # Gamepad support (carga mappings de SDL_GameControllerDB)
+        self.gamepad = GamepadManager("gamecontrollerdb.txt")
 
         # Initialize renderer
         self.renderer = OpenGLRenderer(self.screen_width, self.screen_height)

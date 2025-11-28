@@ -3,38 +3,78 @@ Gamepad/Joystick support using GLFW
 """
 
 import glfw
+from pathlib import Path
 from typing import Optional, Tuple
 from dataclasses import dataclass
+
+
+def load_gamepad_mappings(filepath: str = None) -> int:
+    """
+    Carga mappings de gamepad desde un archivo SDL_GameControllerDB.
+    
+    Args:
+        filepath: Ruta al archivo gamecontrollerdb.txt
+                  Si es None, busca en ubicaciones comunes
+    
+    Returns:
+        Número de mappings cargados, o -1 si falla
+    """
+    search_paths = []
+    
+    if filepath:
+        search_paths.append(Path(filepath))
+    
+    # Buscar en ubicaciones comunes
+    search_paths.extend([
+        Path("gamecontrollerdb.txt"),
+        Path("assets/gamecontrollerdb.txt"),
+        Path(__file__).parent / "gamecontrollerdb.txt",
+        Path(__file__).parent.parent / "gamecontrollerdb.txt",
+        Path.home() / ".config/gamecontrollerdb.txt",
+    ])
+    
+    for path in search_paths:
+        if path.exists():
+            try:
+                content = path.read_text(encoding='utf-8')
+                result = glfw.update_gamepad_mappings(content)
+                if result:
+                    count = sum(1 for line in content.splitlines() 
+                               if line.strip() and not line.startswith('#'))
+                    print(f"Gamepad mappings cargados: {count} desde {path}")
+                    return count
+            except Exception as e:
+                print(f"Error cargando mappings desde {path}: {e}")
+    
+    print("No se encontró gamecontrollerdb.txt")
+    return -1
 
 
 @dataclass
 class GamepadState:
     """Estado actual del gamepad"""
-    # Ejes analógicos (valores de -1.0 a 1.0)
     left_x: float = 0.0
     left_y: float = 0.0
     right_x: float = 0.0
     right_y: float = 0.0
     
-    # Triggers (valores de 0.0 a 1.0)
     left_trigger: float = 0.0
     right_trigger: float = 0.0
     
-    # Botones (True/False)
-    a: bool = False  # Cross en PlayStation
-    b: bool = False  # Circle
-    x: bool = False  # Square
-    y: bool = False  # Triangle
+    a: bool = False
+    b: bool = False
+    x: bool = False
+    y: bool = False
     
     left_bumper: bool = False
     right_bumper: bool = False
     
-    back: bool = False  # Select
+    back: bool = False
     start: bool = False
-    guide: bool = False  # PS/Xbox button
+    guide: bool = False
     
-    left_stick: bool = False   # L3
-    right_stick: bool = False  # R3
+    left_stick: bool = False
+    right_stick: bool = False
     
     dpad_up: bool = False
     dpad_right: bool = False
@@ -45,27 +85,53 @@ class GamepadState:
 class GamepadManager:
     """Manages gamepad input"""
     
-    # Deadzone para evitar drift en sticks analógicos
     DEADZONE = 0.15
     
-    def __init__(self):
+    def __init__(self, mappings_file: str = None):
         self.connected_gamepad: Optional[int] = None
         self.is_standard_gamepad = False
         self.state = GamepadState()
         self.previous_state = GamepadState()
         
-        # Joystick layout (detectado automáticamente)
         self.num_axes = 0
         self.num_buttons = 0
         
+        # Cargar mappings de SDL_GameControllerDB
+        load_gamepad_mappings(mappings_file)
+        
         self._find_gamepad()
+    
+    def _find_gamepad(self):
+        """Busca un gamepad conectado"""
+        for jid in range(glfw.JOYSTICK_1, glfw.JOYSTICK_LAST + 1):
+            if glfw.joystick_present(jid):
+                name = glfw.get_joystick_name(jid)
+                if isinstance(name, bytes):
+                    name = name.decode('utf-8')
+                
+                if glfw.joystick_is_gamepad(jid):
+                    gp_name = glfw.get_gamepad_name(jid)
+                    if isinstance(gp_name, bytes):
+                        gp_name = gp_name.decode('utf-8')
+                    print(f"Gamepad encontrado: {gp_name} (ID: {jid})")
+                    self.connected_gamepad = jid
+                    self.is_standard_gamepad = True
+                    return
+                else:
+                    print(f"Joystick encontrado: {name} (ID: {jid})")
+                    self.connected_gamepad = jid
+                    self.is_standard_gamepad = False
+                    self._detect_joystick_layout(jid)
+                    return
+        
+        if self.connected_gamepad is None:
+            print("No se encontró ningún joystick/gamepad")
     
     def _detect_joystick_layout(self, jid: int):
         """Detecta la configuración del joystick"""
         axes_result = glfw.get_joystick_axes(jid)
         buttons_result = glfw.get_joystick_buttons(jid)
         
-        # Manejar diferentes formatos de retorno
         if axes_result is None:
             self.num_axes = 0
         elif isinstance(axes_result, tuple):
@@ -88,30 +154,6 @@ class GamepadManager:
         
         print(f"  Ejes: {self.num_axes}, Botones: {self.num_buttons}")
     
-    def _find_gamepad(self):
-        """Busca un gamepad conectado"""
-        for jid in range(glfw.JOYSTICK_1, glfw.JOYSTICK_LAST + 1):
-            if glfw.joystick_present(jid):
-                name = glfw.get_joystick_name(jid)
-                if isinstance(name, bytes):
-                    name = name.decode('utf-8')
-                
-                if glfw.joystick_is_gamepad(jid):
-                    print(f"Gamepad encontrado: {name} (ID: {jid})")
-                    self.connected_gamepad = jid
-                    self.is_standard_gamepad = True
-                    return
-                else:
-                    # Joystick genérico - lo usamos igual
-                    print(f"Joystick encontrado: {name} (ID: {jid})")
-                    self.connected_gamepad = jid
-                    self.is_standard_gamepad = False
-                    self._detect_joystick_layout(jid)
-                    return
-        
-        if self.connected_gamepad is None:
-            print("No se encontró ningún joystick/gamepad")
-    
     def update(self):
         """Actualiza el estado del gamepad"""
         self.previous_state = GamepadState(
@@ -123,7 +165,6 @@ class GamepadManager:
             back=self.state.back,
         )
         
-        # Verificar si sigue conectado
         if self.connected_gamepad is not None:
             if not glfw.joystick_present(self.connected_gamepad):
                 print("Joystick desconectado")
@@ -131,16 +172,13 @@ class GamepadManager:
                 self.state = GamepadState()
                 return
         else:
-            # No intentar reconectar cada frame - muy lento
             return
         
-        # Leer estado del gamepad
         if self.is_standard_gamepad and glfw.joystick_is_gamepad(self.connected_gamepad):
             state = glfw.get_gamepad_state(self.connected_gamepad)
             if state:
                 self._parse_gamepad_state(state)
         else:
-            # Joystick genérico
             self._parse_joystick_state()
     
     def _parse_gamepad_state(self, state):
@@ -148,17 +186,14 @@ class GamepadManager:
         axes = state.axes
         buttons = state.buttons
         
-        # Ejes con deadzone
         self.state.left_x = self._apply_deadzone(axes[glfw.GAMEPAD_AXIS_LEFT_X])
         self.state.left_y = self._apply_deadzone(axes[glfw.GAMEPAD_AXIS_LEFT_Y])
         self.state.right_x = self._apply_deadzone(axes[glfw.GAMEPAD_AXIS_RIGHT_X])
         self.state.right_y = self._apply_deadzone(axes[glfw.GAMEPAD_AXIS_RIGHT_Y])
         
-        # Triggers (vienen de -1 a 1, convertir a 0 a 1)
         self.state.left_trigger = (axes[glfw.GAMEPAD_AXIS_LEFT_TRIGGER] + 1) / 2
         self.state.right_trigger = (axes[glfw.GAMEPAD_AXIS_RIGHT_TRIGGER] + 1) / 2
         
-        # Botones
         self.state.a = buttons[glfw.GAMEPAD_BUTTON_A] == glfw.PRESS
         self.state.b = buttons[glfw.GAMEPAD_BUTTON_B] == glfw.PRESS
         self.state.x = buttons[glfw.GAMEPAD_BUTTON_X] == glfw.PRESS
@@ -180,19 +215,15 @@ class GamepadManager:
         self.state.dpad_left = buttons[glfw.GAMEPAD_BUTTON_DPAD_LEFT] == glfw.PRESS
     
     def _parse_joystick_state(self):
-        """Parsea joystick genérico (como Nacon GC100)"""
+        """Parsea joystick genérico"""
         result = glfw.get_joystick_axes(self.connected_gamepad)
         buttons_result = glfw.get_joystick_buttons(self.connected_gamepad)
         
-        # glfw.get_joystick_axes devuelve una tupla (count, array) o solo el array
-        # dependiendo de la versión de pyglfw
         if result is None:
             axes = []
         elif isinstance(result, tuple):
-            # Algunas versiones devuelven (array, count)
             axes = [result[0][i] for i in range(result[1])] if result[1] > 0 else []
         else:
-            # Intentar acceder directamente
             try:
                 axes = [result[i] for i in range(len(result))]
             except:
@@ -242,7 +273,6 @@ class GamepadManager:
                 self.state.dpad_down = int(buttons[12]) == 1
                 self.state.dpad_left = int(buttons[13]) == 1
         
-        # D-pad en hats
         hats_result = glfw.get_joystick_hats(self.connected_gamepad)
         if hats_result is not None:
             try:
@@ -264,7 +294,6 @@ class GamepadManager:
         """Aplica deadzone al valor del eje"""
         if abs(value) < self.DEADZONE:
             return 0.0
-        # Remapear para que el rango útil sea 0-1
         sign = 1 if value > 0 else -1
         return sign * (abs(value) - self.DEADZONE) / (1.0 - self.DEADZONE)
     
@@ -273,7 +302,6 @@ class GamepadManager:
         dx = self.state.left_x
         dy = self.state.left_y
         
-        # D-pad como alternativa
         if self.state.dpad_left:
             dx = -1.0
         elif self.state.dpad_right:
@@ -287,18 +315,12 @@ class GamepadManager:
         return dx, dy
     
     def get_height_change(self) -> float:
-        """Obtiene cambio de altura (bumpers o triggers)"""
+        """Obtiene cambio de altura (bumpers)"""
         dz = 0.0
-        
-        # Usar bumpers para subir/bajar
         if self.state.left_bumper:
             dz = -1.0
         elif self.state.right_bumper:
             dz = 1.0
-        
-        # O usar triggers para control analógico
-        # dz = self.state.right_trigger - self.state.left_trigger
-        
         return dz
     
     def is_connected(self) -> bool:
