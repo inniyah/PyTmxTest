@@ -14,7 +14,6 @@ if TYPE_CHECKING:
 
 
 class NPCBehavior(Enum):
-    """NPC behavior types"""
     IDLE = "idle"
     WANDER = "wander"
     PATROL = "patrol"
@@ -22,14 +21,29 @@ class NPCBehavior(Enum):
 
 
 class Character:
-    """Character entity - Player or NPC"""
+    """
+    Character entity - Player or NPC
+    
+    Tamaño por defecto (en unidades de tile, donde 1 tile = 1m x 1m x 2m):
+    - collision_width: 0.5 (50cm de ancho)
+    - collision_depth: 0.5 (50cm de largo/profundidad)
+    - collision_height: 0.85 (1.7m de alto, permite pasar por huecos de 2m)
+    """
+    
+    # Valores por defecto para colisiones (en unidades de tile)
+    DEFAULT_COLLISION_WIDTH = 0.5   # 50cm
+    DEFAULT_COLLISION_DEPTH = 0.5   # 50cm  
+    DEFAULT_COLLISION_HEIGHT = 0.85 # 1.7m (si 1 nivel = 2m)
     
     def __init__(self, sprite: AnimatedSprite,
                  x: float = 0.0, y: float = 0.0, z: float = 0.0,
                  speed: float = 100.0,
                  tile_height: int = 32,
                  is_npc: bool = False,
-                 behavior: NPCBehavior = NPCBehavior.IDLE):
+                 behavior: NPCBehavior = NPCBehavior.IDLE,
+                 collision_width: float = None,
+                 collision_depth: float = None,
+                 collision_height: float = None):
         self.sprite = sprite
         self.x = x
         self.y = y
@@ -39,6 +53,19 @@ class Character:
         self.velocity_x = 0.0
         self.velocity_y = 0.0
         self.velocity_z = 0.0
+        
+        # Tamaño de colisión en unidades de tile (personalizable por personaje)
+        self.collision_width = collision_width or self.DEFAULT_COLLISION_WIDTH
+        self.collision_depth = collision_depth or self.DEFAULT_COLLISION_DEPTH
+        self.collision_height = collision_height or self.DEFAULT_COLLISION_HEIGHT
+        
+        # Collision reference (set by EntityManager)
+        self.collision_map = None
+        self.tile_width = 32
+        
+        # Límites de altura
+        self.min_z = 0.0
+        self.max_z = 10.0
         
         # NPC settings
         self.is_npc = is_npc
@@ -63,8 +90,13 @@ class Character:
         self._texture_cache: Dict[Tuple[Direction, int], 'Texture'] = {}
         self._textures_initialized = False
 
+    def set_collision_size(self, width: float, depth: float, height: float):
+        """Configura el tamaño de colisión del personaje (en unidades de tile)"""
+        self.collision_width = width
+        self.collision_depth = depth
+        self.collision_height = height
+
     def _init_textures(self, renderer: 'OpenGLRenderer'):
-        """Pre-create all frame textures"""
         from ..renderer.texture import Texture
         
         for direction in Direction:
@@ -75,25 +107,66 @@ class Character:
         self._textures_initialized = True
 
     def update(self, dt: float):
-        """Update character state"""
         if self.is_npc:
             self._update_npc_behavior(dt)
         
         is_moving = (self.velocity_x != 0 or self.velocity_y != 0)
         
         if is_moving:
-            self.x += self.velocity_x * dt
-            self.y += self.velocity_y * dt
+            new_x = self.x + self.velocity_x * dt
+            new_y = self.y + self.velocity_y * dt
+            
+            if self.collision_map is not None:
+                if self._can_move_to(new_x, self.y, self.z):
+                    self.x = new_x
+                if self._can_move_to(self.x, new_y, self.z):
+                    self.y = new_y
+            else:
+                self.x = new_x
+                self.y = new_y
+            
             self._update_direction()
         
+        # Movimiento en Z con validación
         if self.velocity_z != 0:
-            self.z += self.velocity_z * dt
+            new_z = self.z + self.velocity_z * dt
+            new_z = max(self.min_z, min(self.max_z, new_z))
+            
+            if self.collision_map is not None:
+                if self._can_change_height(new_z):
+                    self.z = new_z
+            else:
+                self.z = new_z
         
         self.sprite.set_walking(is_moving)
         self.sprite.update(dt)
+    
+    def _can_move_to(self, px: float, py: float, z: float) -> bool:
+        if self.collision_map is None:
+            return True
+        
+        return self.collision_map.can_move_to_with_size(
+            px, py, z,
+            self.collision_width,
+            self.collision_depth,
+            self.collision_height,
+            self.tile_width, self.tile_height
+        )
+    
+    def _can_change_height(self, new_z: float) -> bool:
+        if self.collision_map is None:
+            return True
+        
+        return self.collision_map.can_change_height(
+            self.x, self.y,
+            self.z, new_z,
+            self.collision_width,
+            self.collision_depth,
+            self.collision_height,
+            self.tile_width, self.tile_height
+        )
 
     def _update_npc_behavior(self, dt: float):
-        """Update NPC AI behavior"""
         if self.behavior == NPCBehavior.IDLE:
             self._behavior_idle()
         elif self.behavior == NPCBehavior.WANDER:
@@ -104,12 +177,10 @@ class Character:
             self._behavior_follow(dt)
 
     def _behavior_idle(self):
-        """Just stand still"""
         self.velocity_x = 0
         self.velocity_y = 0
 
     def _behavior_wander(self, dt: float):
-        """Wander randomly around home position"""
         if self.is_idle_pausing:
             self.idle_timer -= dt
             if self.idle_timer <= 0:
@@ -135,7 +206,6 @@ class Character:
             
             self.wander_timer = random.uniform(1.0, self.wander_interval)
         
-        # Stay within wander radius
         dist_from_home = math.sqrt((self.x - self.home_x)**2 + (self.y - self.home_y)**2)
         if dist_from_home > self.wander_radius:
             dx = self.home_x - self.x
@@ -146,7 +216,6 @@ class Character:
                 self.velocity_y = (dy / dist) * self.speed * 0.5
 
     def _behavior_patrol(self, dt: float):
-        """Patrol between defined points"""
         if not self.patrol_points:
             self._behavior_idle()
             return
@@ -164,7 +233,6 @@ class Character:
             self.velocity_y = (dy / dist) * speed
 
     def _behavior_follow(self, dt: float):
-        """Follow target character"""
         if not self.target:
             self._behavior_idle()
             return
@@ -196,7 +264,6 @@ class Character:
                 self.sprite.set_direction(Direction.LEFT)
 
     def move(self, dx: float, dy: float, dz: float = 0.0):
-        """Set movement velocity (for player control)"""
         if dx == 0 and dy == 0:
             self.velocity_x = 0
             self.velocity_y = 0
@@ -212,7 +279,6 @@ class Character:
         self.velocity_z = dz * self.speed * 0.01
 
     def set_patrol_points(self, points: list[Tuple[float, float]]):
-        """Set patrol path for NPC"""
         self.patrol_points = points
         self.patrol_index = 0
 

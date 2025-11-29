@@ -171,6 +171,39 @@ class OpenGLRenderer:
         glBindVertexArray(0)
         glUseProgram(0)
 
+    def draw_rects(self, rects: List[Tuple[float, float, float, float]],
+                   color: Tuple[int, int, int, int]):
+        """Draw multiple filled rectangles with alpha"""
+        if not rects:
+            return
+        
+        r, g, b, a = color[0]/255.0, color[1]/255.0, color[2]/255.0, color[3]/255.0
+        
+        vertices = []
+        for x, y, w, h in rects:
+            # Dos triángulos por rectángulo
+            # Triángulo 1: top-left, top-right, bottom-right
+            vertices.extend([x, y, r, g, b, a])
+            vertices.extend([x + w, y, r, g, b, a])
+            vertices.extend([x + w, y + h, r, g, b, a])
+            # Triángulo 2: top-left, bottom-right, bottom-left
+            vertices.extend([x, y, r, g, b, a])
+            vertices.extend([x + w, y + h, r, g, b, a])
+            vertices.extend([x, y + h, r, g, b, a])
+        
+        vertices = np.array(vertices, dtype=np.float32)
+        
+        glUseProgram(self.simple_shader)
+        glUniformMatrix4fv(self.simple_proj_loc, 1, GL_FALSE, self.projection.T)
+        glBindBuffer(GL_ARRAY_BUFFER, self.simple_vbo)
+        glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.nbytes, vertices)
+        glBindVertexArray(self.simple_vao)
+        glDisable(GL_DEPTH_TEST)  # Dibujar encima de todo
+        glDrawArrays(GL_TRIANGLES, 0, len(rects) * 6)
+        glEnable(GL_DEPTH_TEST)
+        glBindVertexArray(0)
+        glUseProgram(0)
+
     def draw_text_lines(self, text_lines: List[str], x: int, y: int):
         """Draw text using PIL-rendered texture (optimized)"""
         # Solo actualizar cada 10 frames o si cambió el contenido base
