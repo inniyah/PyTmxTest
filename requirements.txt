@@ -1,0 +1,8 @@
+PyOpenGL>=3.1.6
+glfw>=2.5.0
+numpy>=1.21
+Pillow>=9.0
+# Opcionales:
+# PyOpenGL_accelerate   # más rápido
+# zstandard             # mapas TMX con compresión zstd
+# pytest                # tests

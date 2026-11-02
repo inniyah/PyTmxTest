@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tmx-explorer"
+version = "2.1.0"
+description = "Visor OpenGL de mapas Tiled (TMX) con niveles de altura y personajes"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.8"
+dependencies = [
+    "PyOpenGL>=3.1.6",
+    "glfw>=2.5.0",
+    "numpy>=1.21",
+    "Pillow>=9.0",
+]
+
+[project.optional-dependencies]
+zstd = ["zstandard"]
+fast = ["PyOpenGL_accelerate"]
+dev = ["pytest"]
+
+[project.scripts]
+tmx-explorer = "tmx_explorer.__main__:main"
+
+[tool.setuptools]
+py-modules = ["tmx_manager"]
+packages = ["tmx_explorer", "tmx_explorer.entities", "tmx_explorer.map",
+            "tmx_explorer.renderer", "tmx_explorer.shaders"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

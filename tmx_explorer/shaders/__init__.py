@@ -1,15 +1,6 @@
-"""GLSL shader sources"""
+"""Código fuente GLSL."""
 
-from .sources import (
-    VERTEX_SHADER,
-    FRAGMENT_SHADER, 
-    SIMPLE_VERTEX_SHADER,
-    SIMPLE_FRAGMENT_SHADER,
-)
+from .sources import (FRAGMENT_SHADER, SIMPLE_FRAGMENT_SHADER, SIMPLE_VERTEX_SHADER,
+                      VERTEX_SHADER)
 
-__all__ = [
-    "VERTEX_SHADER",
-    "FRAGMENT_SHADER",
-    "SIMPLE_VERTEX_SHADER", 
-    "SIMPLE_FRAGMENT_SHADER",
-]
+__all__ = ["VERTEX_SHADER", "FRAGMENT_SHADER", "SIMPLE_VERTEX_SHADER", "SIMPLE_FRAGMENT_SHADER"]

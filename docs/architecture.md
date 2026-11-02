@@ -2,6 +2,12 @@
 
 A comprehensive technical document explaining the structure, data flow, and performance optimizations of the TMX-based 2D game engine.
 
+> **Nota sobre el estado actual (v2.1).** Este documento explica los conceptos de diseño.
+> Algunas optimizaciones descritas todavía no son ciertas del todo:
+> cada tile es hoy su propia textura, así que el batching agrupa por GID y hay una
+> draw call por cada tile distinto visible (la solución pendiente es un atlas por tileset).
+> Las rutas de código reales están en el README.
+
 ---
 
 ## Table of Contents
@@ -718,8 +724,8 @@ def get_visible_bounds(self):
 
 | Optimization | Technique | Impact |
 |--------------|-----------|--------|
-| Draw Call Reduction | Sprite Batching | 100× fewer draw calls |
-| Memory Efficiency | Sprite Sharing | 99% less sprite memory |
+| Draw Call Reduction | Sprite Batching | 1 draw call por textura (hoy, por tile distinto; pendiente: atlas) |
+| Memory Efficiency | Sprite Sharing | Frames y texturas GPU compartidos por spritesheet |
 | Render Culling | Visible Bounds | Only render visible tiles |
 | Collision Speed | NumPy Arrays | O(1) tile lookup |
 | Texture Management | Pre-loading + Caching | No runtime loading |
@@ -800,7 +806,7 @@ def get_characters_at(x, y, radius):
 ┌─────────────────────────────────────────────────────────────┐
 │                    CPU MEMORY                               │
 ├─────────────────────────────────────────────────────────────┤
-│  Map3D.mapa (NumPy)     │  H×D×W×N×2 bytes                  │
+│  Map3D.mapa + flips     │  H×D×W×N×5 bytes (uint32 + uint8) │
 │  CollisionMap (NumPy)   │  H×D×W×2 bytes                    │
 │  Vertex Array (NumPy)   │  max_sprites×144 bytes            │
 │  Entity State           │  ~1 KB per character              │
@@ -823,7 +829,7 @@ RUNTIME:
   - Textures: Static after upload
   
 CLEANUP:
-  - Texture.__del__() calls glDeleteTextures()
+  - Texturas: Texture.delete() explícito (HUD) o al destruir el contexto (glfw.terminate)
   - NumPy arrays freed by Python GC
 ```
 

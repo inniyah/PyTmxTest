@@ -1,16 +1,8 @@
-"""
-Entity system for characters and NPCs
-"""
+"""Personajes, NPCs y sprites animados."""
 
-from .sprite import AnimatedSprite, Direction, AnimationState
 from .character import Character, NPCBehavior
 from .manager import EntityManager
+from .sprite import AnimatedSprite, AnimationState, Direction
 
-__all__ = [
-    "AnimatedSprite",
-    "Direction", 
-    "AnimationState",
-    "Character",
-    "NPCBehavior",
-    "EntityManager",
-]
+__all__ = ["AnimatedSprite", "Direction", "AnimationState",
+           "Character", "NPCBehavior", "EntityManager"]

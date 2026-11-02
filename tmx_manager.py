@@ -1,93 +1,8 @@
 #!/usr/bin/env python3
 
-"""
-Module for reading, modifying and writing TMX files (Tiled Map Format)
-Supports TMX version 1.11.0 and earlier versions
+"""Lectura, modificación y escritura de archivos TMX (Tiled Map Format).
 
-=============================================================================
-WHAT IS TMX?
-=============================================================================
-
-TMX (Tiled Map XML) is the native format of the Tiled Map Editor, the most
-popular tile map editor for 2D games. TMX files describe:
-
-- Map dimensions and tile sizes
-- Tilesets (collections of tile graphics)
-- Layers (tile layers, object layers, groups)
-- Custom properties (metadata on any element)
-
-This module provides complete read/write support for TMX files, allowing:
-- Loading maps created in Tiled into your game
-- Modifying maps programmatically
-- Creating maps entirely in code
-- Saving maps back to TMX format
-
-=============================================================================
-TMX FILE STRUCTURE
-=============================================================================
-
-A TMX file is XML with this basic structure:
-
-    <map version="1.10" orientation="orthogonal" width="100" height="100"
-         tilewidth="32" tileheight="32">
-         
-        <tileset firstgid="1" name="terrain" tilewidth="32" tileheight="32">
-            <image source="terrain.png" width="256" height="256"/>
-        </tileset>
-        
-        <layer name="Ground" width="100" height="100">
-            <data encoding="csv">
-                1,2,3,4,5,...
-            </data>
-        </layer>
-        
-        <objectgroup name="Collisions">
-            <object id="1" x="100" y="200" width="32" height="32"/>
-        </objectgroup>
-    </map>
-
-=============================================================================
-GLOBAL TILE IDs (GIDs)
-=============================================================================
-
-Tiles are referenced by Global IDs (GIDs) across all tilesets:
-
-    Tileset A (firstgid=1):   tiles 1-100
-    Tileset B (firstgid=101): tiles 101-200
-    
-    GID 0 = empty tile (no graphic)
-    GID 50 = tile 50 from tileset A
-    GID 150 = tile 50 from tileset B (150 - 101 = 49, so tile index 49)
-
-Local tile ID within tileset = GID - tileset.firstgid
-
-=============================================================================
-SUPPORTED FEATURES
-=============================================================================
-
-Map Orientations:
-- Orthogonal (standard square tiles)
-- Isometric (diamond-shaped tiles)
-- Staggered (offset rows/columns)
-- Hexagonal (hexagon tiles)
-
-Layer Types:
-- TileLayer: Grid of tile references
-- ObjectGroup: Vector objects (rectangles, points, etc.)
-- LayerGroup: Folder containing other layers
-
-Data Encodings:
-- XML (deprecated, verbose)
-- CSV (human-readable, good for debugging)
-- Base64 (compact, binary)
-
-Compressions (with Base64):
-- None (uncompressed)
-- zlib (standard compression)
-- gzip (gzip format)
-- zstd (modern, high-ratio compression)
-
-=============================================================================
+Soporta TMX 1.11.0 y anteriores.
 """
 
 import xml.etree.ElementTree as ET
@@ -96,76 +11,25 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import base64
 import zlib
-import struct
 import array
 
 
-# =============================================================================
 # PROPERTY CLASS
-# =============================================================================
 
 @dataclass
 class Property:
-    """
-    Custom property attached to any TMX element.
-    
-    Tiled allows adding custom properties to maps, layers, tiles, objects, etc.
-    Properties are key-value pairs with typed values.
-    
-    ==========================================================================
-    SUPPORTED TYPES
-    ==========================================================================
-    
-    - string: Text value (default)
-    - int: Integer number
-    - float: Decimal number
-    - bool: True/False
-    - color: Color in #AARRGGBB format
-    - file: File path reference
-    - object: Reference to another object by ID
-    
-    ==========================================================================
-    USE CASES
-    ==========================================================================
-    
-    Properties enable data-driven game design:
-    
-    On tiles:
-        solid=true         → Mark tiles as collision
-        damage=10          → Damage dealt by hazard tiles
-        animation_speed=2  → Custom animation timing
-    
-    On objects:
-        spawn_type="enemy" → What to spawn here
-        dialogue_id=42     → NPC dialogue reference
-        trigger_event="boss_fight" → Event to fire
-    
-    On layers:
-        Z=2                → Height level for 3D maps
-        parallax_factor=0.5 → Parallax scrolling speed
-    
-    ==========================================================================
-    """
+    """Custom property attached to any TMX element."""
     name: str                    # Property name (key)
     type: str = "string"         # Value type
     value: Any = None            # The actual value
     
     @classmethod
     def from_xml(cls, elem: ET.Element) -> 'Property':
-        """
-        Parse property from XML element.
-        
-        XML format:
-            <property name="solid" type="bool" value="true"/>
-            <property name="health" type="int" value="100"/>
-            <property name="description" value="A wooden door"/>  (type defaults to string)
-        """
+        """Parse property from XML element."""
         prop_type = elem.get('type', 'string')  # Default to string if not specified
         value = elem.get('value', '')
         
-        # -----------------------------------------------------------------
         # TYPE CONVERSION
-        # -----------------------------------------------------------------
         # Convert string value to appropriate Python type
         # This makes properties usable directly in game code
         
@@ -176,9 +40,7 @@ class Property:
         elif prop_type == 'bool':
             # XML stores as "true"/"false" strings
             value = value.lower() == 'true'
-        elif prop_type == 'color':
-            # Keep as string - parsing #AARRGGBB is caller's responsibility
-            value = value
+        # 'color' se deja como string (#AARRGGBB); parsearlo es cosa del llamador
             
         return cls(name=elem.get('name'), type=prop_type, value=value)
     
@@ -196,31 +58,11 @@ class Property:
         return elem
 
 
-# =============================================================================
 # IMAGE CLASS
-# =============================================================================
 
 @dataclass
 class Image:
-    """
-    Image reference used in tilesets.
-    
-    Represents an image file that contains tile graphics.
-    Used by both regular tilesets (one image, many tiles) and
-    image collection tilesets (one image per tile).
-    
-    ==========================================================================
-    ATTRIBUTES
-    ==========================================================================
-    
-    source: Path to image file (relative to TMX/TSX file)
-    width:  Image width in pixels (optional, for validation)
-    height: Image height in pixels (optional)
-    trans:  Transparent color in hex (e.g., "ff00ff" for magenta)
-            Pixels of this color become transparent
-    
-    ==========================================================================
-    """
+    """Image reference used in tilesets."""
     source: str                          # Path to image file
     width: Optional[int] = None          # Image width (pixels)
     height: Optional[int] = None         # Image height (pixels)
@@ -252,45 +94,11 @@ class Image:
         return elem
 
 
-# =============================================================================
 # TILE CLASS
-# =============================================================================
 
 @dataclass
 class Tile:
-    """
-    Individual tile within a tileset.
-    
-    Represents metadata for a specific tile. Not all tiles need Tile objects -
-    only tiles with custom properties, animations, or (for image collections)
-    individual images.
-    
-    ==========================================================================
-    TILE IDs
-    ==========================================================================
-    
-    The 'id' is LOCAL to the tileset (0-based index).
-    To get the Global ID (GID): gid = tileset.firstgid + tile.id
-    
-    Example:
-        Tileset with firstgid=101
-        Tile with id=5
-        GID = 101 + 5 = 106
-    
-    ==========================================================================
-    IMAGE COLLECTION TILESETS
-    ==========================================================================
-    
-    Some tilesets use individual images per tile instead of a spritesheet.
-    These are called "image collection" tilesets, common for:
-    - Isometric buildings (different sizes)
-    - Character portraits
-    - Items with varied dimensions
-    
-    For these, each Tile has its own Image reference.
-    
-    ==========================================================================
-    """
+    """Individual tile within a tileset."""
     id: int                                          # Local tile ID (within tileset)
     type: str = ""                                   # Tile type/class
     properties: Dict[str, Property] = field(default_factory=dict)  # Custom properties
@@ -302,9 +110,7 @@ class Tile:
         tile = cls(id=int(elem.get('id', 0)))
         tile.type = elem.get('type', '')
         
-        # -----------------------------------------------------------------
         # PARSE PROPERTIES
-        # -----------------------------------------------------------------
         props_elem = elem.find('properties')
         if props_elem is not None:
             for prop_elem in props_elem.findall('property'):
@@ -312,9 +118,7 @@ class Tile:
                 # Store by name for O(1) lookup
                 tile.properties[prop.name] = prop
         
-        # -----------------------------------------------------------------
         # PARSE IMAGE (for image collection tilesets)
-        # -----------------------------------------------------------------
         img_elem = elem.find('image')
         if img_elem is not None:
             tile.image = Image.from_xml(img_elem)
@@ -342,78 +146,11 @@ class Tile:
         return elem
 
 
-# =============================================================================
 # TILESET CLASS
-# =============================================================================
 
 @dataclass
 class Tileset:
-    """
-    Tileset collection - a set of tile graphics.
-    
-    ==========================================================================
-    TILESET TYPES
-    ==========================================================================
-    
-    1. SPRITESHEET TILESET (most common):
-       One large image divided into a grid of tiles.
-       
-       +---+---+---+---+
-       | 0 | 1 | 2 | 3 |
-       +---+---+---+---+
-       | 4 | 5 | 6 | 7 |
-       +---+---+---+---+
-       
-       Attributes used: image, tilewidth, tileheight, columns, spacing, margin
-       
-    2. IMAGE COLLECTION TILESET:
-       Each tile is a separate image file.
-       
-       tiles/
-       ├── tree.png     (tile 0)
-       ├── house.png    (tile 1)
-       └── rock.png     (tile 2)
-       
-       Each tile has its own Image reference.
-       Used for: isometric objects, varied-size tiles
-    
-    ==========================================================================
-    EMBEDDED vs EXTERNAL TILESETS
-    ==========================================================================
-    
-    EMBEDDED: Tileset data is inside the TMX file
-        <tileset firstgid="1" name="terrain" tilewidth="32" ...>
-            <image source="terrain.png"/>
-        </tileset>
-    
-    EXTERNAL (TSX): Tileset data is in separate .tsx file
-        <tileset firstgid="1" source="terrain.tsx"/>
-        
-        The TSX file contains the actual tileset definition.
-        Advantages:
-        - Share tileset across multiple maps
-        - Edit tileset without opening each map
-        - Smaller TMX files
-    
-    ==========================================================================
-    SPACING AND MARGIN
-    ==========================================================================
-    
-    For spritesheets with gaps between tiles:
-    
-    margin = pixels around the EDGE of the entire image
-    spacing = pixels BETWEEN tiles
-    
-    +--+===+===+===+--+
-    |  | 0 | 1 | 2 |  |  <- margin
-    +--+===+===+===+--+
-    |  | 3 | 4 | 5 |  |
-    +--+===+===+===+--+
-         ^
-         spacing between tiles
-    
-    ==========================================================================
-    """
+    """Tileset collection - a set of tile graphics."""
     firstgid: int                                    # First Global ID
     name: str                                        # Tileset name
     tilewidth: int                                   # Tile width in pixels
@@ -429,16 +166,7 @@ class Tileset:
     
     @classmethod
     def from_xml(cls, elem: ET.Element, firstgid: int) -> 'Tileset':
-        """
-        Parse tileset from XML element.
-        
-        Parameters:
-        -----------
-        elem : ET.Element
-            The <tileset> XML element
-        firstgid : int
-            First Global ID (from parent TMX, not the TSX itself)
-        """
+        """Parse tileset from XML element."""
         tileset = cls(
             firstgid=firstgid,
             name=elem.get('name', ''),
@@ -472,15 +200,7 @@ class Tileset:
         return tileset
     
     def to_xml(self, include_firstgid: bool = True) -> ET.Element:
-        """
-        Convert tileset back to XML element.
-        
-        Parameters:
-        -----------
-        include_firstgid : bool
-            Whether to include firstgid attribute.
-            True for TMX embedding, False for TSX export.
-        """
+        """Convert tileset back to XML element."""
         elem = ET.Element('tileset')
         
         if include_firstgid:
@@ -521,91 +241,22 @@ class Tileset:
         return elem
 
 
-# =============================================================================
 # LAYER DATA CLASS
-# =============================================================================
 
 @dataclass
 class LayerData:
-    """
-    Tile layer data storage and encoding.
-    
-    Handles the actual tile data within a layer - the grid of GIDs that
-    defines which tile appears at each position.
-    
-    ==========================================================================
-    DATA ENCODINGS
-    ==========================================================================
-    
-    TMX supports multiple encodings for tile data:
-    
-    1. XML (deprecated):
-       <data>
-           <tile gid="1"/><tile gid="2"/><tile gid="3"/>...
-       </data>
-       Verbose, slow to parse, not recommended.
-    
-    2. CSV:
-       <data encoding="csv">
-           1,2,3,4,5,
-           6,7,8,9,10
-       </data>
-       Human-readable, good for debugging, moderate file size.
-    
-    3. Base64:
-       <data encoding="base64">
-           AQAAAAIAAAADAAAABAAAAAUAAAAGAAAABwAAAA==
-       </data>
-       Compact binary, optionally compressed.
-    
-    ==========================================================================
-    COMPRESSION (with Base64 only)
-    ==========================================================================
-    
-    - zlib: Standard compression, good ratio, fast
-    - gzip: Similar to zlib with header, widely compatible
-    - zstd: Modern, best ratio, requires extra library
-    
-    Compression is almost always worth it:
-    - 100x100 map CSV: ~50KB
-    - 100x100 map Base64+zlib: ~5KB
-    
-    ==========================================================================
-    INTERNAL STORAGE
-    ==========================================================================
-    
-    Internally, tiles are stored as array.array('I') - unsigned 32-bit ints.
-    This is:
-    - Memory efficient (4 bytes per tile)
-    - Fast to access (C-level array)
-    - Easy to convert to/from binary formats
-    
-    Index calculation: tiles[y * width + x]
-    
-    ==========================================================================
-    """
+    """Tile layer data storage and encoding."""
     encoding: Optional[str] = None      # csv, base64, or None (XML)
     compression: Optional[str] = None   # gzip, zlib, zstd, or None
     tiles: array.array = field(default_factory=lambda: array.array('I'))
     
     def decode_data(self, data_elem: ET.Element, width: int, height: int):
-        """
-        Decode tile data from XML element.
-        
-        Parameters:
-        -----------
-        data_elem : ET.Element
-            The <data> XML element containing tile data
-        width, height : int
-            Layer dimensions (needed for validation)
-        """
+        """Decode tile data from XML element."""
         encoding = data_elem.get('encoding')
         compression = data_elem.get('compression')
         
         if encoding == 'csv':
-            # -----------------------------------------------------------------
             # CSV FORMAT
-            # -----------------------------------------------------------------
             # Data looks like: "1,2,3,4,\n5,6,7,8,\n..."
             # Each number is a GID (Global ID)
             csv_data = data_elem.text.strip()
@@ -617,16 +268,12 @@ class LayerData:
             self.tiles = array.array('I', gids)
             
         elif encoding == 'base64':
-            # -----------------------------------------------------------------
             # BASE64 FORMAT
-            # -----------------------------------------------------------------
             # Binary data encoded as Base64 string
             b64_data = data_elem.text.strip()
             raw_data = base64.b64decode(b64_data)
             
-            # -----------------------------------------------------------------
             # DECOMPRESSION (if compressed)
-            # -----------------------------------------------------------------
             if compression == 'zlib':
                 raw_data = zlib.decompress(raw_data)
                 
@@ -646,19 +293,14 @@ class LayerData:
                         "Install with: pip install zstandard"
                     )
             
-            # -----------------------------------------------------------------
             # CONVERT BYTES TO UINT32 ARRAY
-            # -----------------------------------------------------------------
             # Each tile is 4 bytes (little-endian uint32)
             # Total tiles = bytes / 4
-            num_tiles = len(raw_data) // 4
             self.tiles = array.array('I')
             self.tiles.frombytes(raw_data)
             
         else:
-            # -----------------------------------------------------------------
             # XML FORMAT (deprecated)
-            # -----------------------------------------------------------------
             # Each tile is an element: <tile gid="5"/>
             gids = []
             for tile_elem in data_elem.findall('tile'):
@@ -671,14 +313,7 @@ class LayerData:
         self.compression = compression
     
     def to_xml(self, width: int, height: int) -> ET.Element:
-        """
-        Convert tile data back to XML element.
-        
-        Parameters:
-        -----------
-        width, height : int
-            Layer dimensions (for CSV formatting)
-        """
+        """Convert tile data back to XML element."""
         elem = ET.Element('data')
         
         # Default to CSV if no encoding set (readable, debuggable)
@@ -690,9 +325,7 @@ class LayerData:
             elem.set('compression', self.compression)
         
         if self.encoding == 'csv':
-            # -----------------------------------------------------------------
             # CSV OUTPUT
-            # -----------------------------------------------------------------
             # Format as rows for readability
             csv_lines = []
             for y in range(height):
@@ -706,9 +339,7 @@ class LayerData:
             elem.text = '\n' + ',\n'.join(csv_lines) + '\n'
             
         elif self.encoding == 'base64':
-            # -----------------------------------------------------------------
             # BASE64 OUTPUT
-            # -----------------------------------------------------------------
             # Convert array to bytes
             raw_data = self.tiles.tobytes()
             
@@ -718,7 +349,15 @@ class LayerData:
             elif self.compression == 'gzip':
                 import gzip
                 raw_data = gzip.compress(raw_data)
-            # Note: zstd writing not implemented (rarely needed)
+            elif self.compression == 'zstd':
+                try:
+                    import zstandard as zstd
+                except ImportError:
+                    raise ImportError('zstandard library required for zstd compression. '
+                                      'Install with: pip install zstandard')
+                raw_data = zstd.ZstdCompressor().compress(raw_data)
+            elif self.compression:
+                raise ValueError(f'Unsupported compression: {self.compression}')
             
             # Encode to Base64
             b64_data = base64.b64encode(raw_data).decode('ascii')
@@ -727,46 +366,11 @@ class LayerData:
         return elem
 
 
-# =============================================================================
 # TILE LAYER CLASS
-# =============================================================================
 
 @dataclass
 class TileLayer:
-    """
-    Tile layer - a grid of tile references.
-    
-    The main content layer type in TMX. Contains a 2D grid where each cell
-    references a tile by its Global ID (GID).
-    
-    ==========================================================================
-    LAYER PROPERTIES
-    ==========================================================================
-    
-    Rendering properties:
-    - visible: Whether layer is rendered
-    - opacity: Transparency (0.0 = invisible, 1.0 = opaque)
-    - tintcolor: Color tint applied to all tiles
-    
-    Positioning:
-    - offsetx, offsety: Pixel offset from map origin
-    - parallaxx, parallaxy: Parallax scrolling factors
-      (1.0 = normal, 0.5 = half speed, 0 = static background)
-    
-    ==========================================================================
-    TILE ACCESS
-    ==========================================================================
-    
-    Access tiles using get_tile_gid(x, y) and set_tile_gid(x, y, gid):
-    
-        gid = layer.get_tile_gid(5, 10)  # Get tile at column 5, row 10
-        layer.set_tile_gid(5, 10, 42)    # Set tile to GID 42
-    
-    GID 0 = empty (no tile)
-    GID > 0 = reference to tileset tile
-    
-    ==========================================================================
-    """
+    """Tile layer - a grid of tile references."""
     name: str                                        # Layer name
     width: int                                       # Width in tiles
     height: int                                      # Height in tiles
@@ -850,20 +454,7 @@ class TileLayer:
         return elem
     
     def get_tile_gid(self, x: int, y: int) -> int:
-        """
-        Get the GID of the tile at position (x, y).
-        
-        Parameters:
-        -----------
-        x : int
-            Column (0 to width-1)
-        y : int
-            Row (0 to height-1)
-            
-        Returns:
-        --------
-        int : Global tile ID (0 = empty, >0 = tile reference)
-        """
+        """Get the GID of the tile at position (x, y)."""
         if 0 <= x < self.width and 0 <= y < self.height:
             # Convert 2D coords to 1D index: row-major order
             index = y * self.width + x
@@ -871,55 +462,17 @@ class TileLayer:
         return 0  # Out of bounds = empty
     
     def set_tile_gid(self, x: int, y: int, gid: int):
-        """
-        Set the GID of the tile at position (x, y).
-        
-        Parameters:
-        -----------
-        x, y : int
-            Tile coordinates
-        gid : int
-            Global tile ID to set (0 = clear tile)
-        """
+        """Set the GID of the tile at position (x, y)."""
         if 0 <= x < self.width and 0 <= y < self.height:
             index = y * self.width + x
             self.data.tiles[index] = gid
 
 
-# =============================================================================
 # MAP OBJECT CLASS
-# =============================================================================
 
 @dataclass
 class MapObject:
-    """
-    Object in an object layer.
-    
-    Objects are vector shapes placed on the map, used for:
-    - Collision shapes (rectangles, polygons)
-    - Spawn points (position only)
-    - Trigger areas
-    - Entity placement (tile objects)
-    
-    ==========================================================================
-    OBJECT TYPES
-    ==========================================================================
-    
-    Basic rectangle:
-        x, y, width, height define the bounds
-        
-    Point:
-        Just x, y (width and height are 0)
-        
-    Tile object:
-        Has a gid - displays a tile graphic at this position
-        Used for placing decorations, items, etc.
-        
-    Polygon/Polyline:
-        Has list of points (not implemented in this basic version)
-    
-    ==========================================================================
-    """
+    """Object in an object layer."""
     id: int                                          # Unique object ID
     name: str = ""                                   # Object name
     type: str = ""                                   # Object type/class
@@ -996,23 +549,11 @@ class MapObject:
         return elem
 
 
-# =============================================================================
 # OBJECT GROUP CLASS
-# =============================================================================
 
 @dataclass
 class ObjectGroup:
-    """
-    Object layer - contains vector objects.
-    
-    Used for non-tile data:
-    - Collision shapes
-    - Spawn points
-    - Triggers and zones
-    - Entity placements
-    
-    Objects are stored in a list (order may matter for some games).
-    """
+    """Object layer - contains vector objects."""
     name: str                                        # Layer name
     id: int = 0                                      # Unique layer ID
     visible: bool = True                             # Is layer visible?
@@ -1086,29 +627,11 @@ class ObjectGroup:
         return elem
 
 
-# =============================================================================
 # LAYER GROUP CLASS
-# =============================================================================
 
 @dataclass
 class LayerGroup:
-    """
-    Group of layers - a folder containing other layers.
-    
-    Layer groups help organize complex maps:
-    
-    Layers:
-    ├── Background (group)
-    │   ├── Sky
-    │   └── Mountains
-    ├── Gameplay (group)
-    │   ├── Ground
-    │   ├── Objects
-    │   └── Collisions
-    └── Foreground
-    
-    Groups can be nested (groups within groups).
-    """
+    """Group of layers - a folder containing other layers."""
     name: str                                        # Group name
     id: int = 0                                      # Unique ID
     visible: bool = True                             # Is group visible?
@@ -1144,9 +667,7 @@ class LayerGroup:
                 prop = Property.from_xml(prop_elem)
                 group.properties[prop.name] = prop
         
-        # -----------------------------------------------------------------
         # RECURSIVELY LOAD CHILD LAYERS
-        # -----------------------------------------------------------------
         # Groups can contain any layer type, including nested groups
         for child in elem:
             if child.tag == 'layer':
@@ -1195,76 +716,11 @@ class LayerGroup:
         return elem
 
 
-# =============================================================================
 # TILED MAP CLASS (Main Entry Point)
-# =============================================================================
 
 @dataclass
 class TiledMap:
-    """
-    Complete Tiled map - the root object for TMX files.
-    
-    This is the main class you'll interact with. It contains:
-    - Map metadata (size, orientation, tile size)
-    - Tilesets (collections of tile graphics)
-    - Layers (tile layers, object layers, groups)
-    - Custom properties
-    
-    ==========================================================================
-    MAP ORIENTATIONS
-    ==========================================================================
-    
-    ORTHOGONAL (most common):
-        Standard square grid, tiles aligned in rows and columns.
-        +---+---+---+
-        | 0 | 1 | 2 |
-        +---+---+---+
-        | 3 | 4 | 5 |
-        +---+---+---+
-    
-    ISOMETRIC:
-        Diamond-shaped tiles for pseudo-3D effect.
-           /\
-          /0 \
-         /\  /\
-        /1 \/2 \
-        \  /\  /
-         \/3 \/
-    
-    STAGGERED:
-        Offset rows/columns (isometric without rotation).
-    
-    HEXAGONAL:
-        Hexagon tiles for strategy games.
-    
-    ==========================================================================
-    RENDER ORDER
-    ==========================================================================
-    
-    Determines which corner rendering starts from:
-    - right-down: Left-to-right, top-to-bottom (most common)
-    - right-up: Left-to-right, bottom-to-top
-    - left-down: Right-to-left, top-to-bottom
-    - left-up: Right-to-left, bottom-to-top
-    
-    ==========================================================================
-    USAGE
-    ==========================================================================
-    
-    Loading:
-        map_data = TiledMap.load("level1.tmx")
-        print(f"Map size: {map_data.width}x{map_data.height}")
-    
-    Accessing layers:
-        ground = map_data.get_layer_by_name("Ground")
-        tile_gid = ground.get_tile_gid(5, 10)
-    
-    Modifying:
-        ground.set_tile_gid(5, 10, 42)
-        map_data.save("modified.tmx")
-    
-    ==========================================================================
-    """
+    """Complete Tiled map - the root object for TMX files."""
     version: str = "1.10"                            # TMX format version
     tiledversion: str = ""                           # Tiled editor version
     orientation: str = "orthogonal"                  # Map orientation
@@ -1280,32 +736,14 @@ class TiledMap:
     
     @classmethod
     def load(cls, filepath: Union[str, Path]) -> 'TiledMap':
-        """
-        Load a TMX file from disk.
-        
-        Parameters:
-        -----------
-        filepath : str or Path
-            Path to the .tmx file
-            
-        Returns:
-        --------
-        TiledMap : Parsed map object
-        
-        Raises:
-        -------
-        FileNotFoundError : If TMX file doesn't exist
-        xml.etree.ElementTree.ParseError : If XML is malformed
-        """
+        """Load a TMX file from disk."""
         filepath = Path(filepath)
         
         # Parse XML
         tree = ET.parse(filepath)
         root = tree.getroot()
         
-        # -----------------------------------------------------------------
         # PARSE MAP ATTRIBUTES
-        # -----------------------------------------------------------------
         map_obj = cls(
             version=root.get('version', '1.0'),
             tiledversion=root.get('tiledversion', ''),
@@ -1318,26 +756,20 @@ class TiledMap:
             infinite=root.get('infinite', '0') == '1'
         )
         
-        # -----------------------------------------------------------------
         # PARSE MAP PROPERTIES
-        # -----------------------------------------------------------------
         props_elem = root.find('properties')
         if props_elem is not None:
             for prop_elem in props_elem.findall('property'):
                 prop = Property.from_xml(prop_elem)
                 map_obj.properties[prop.name] = prop
         
-        # -----------------------------------------------------------------
         # PARSE TILESETS
-        # -----------------------------------------------------------------
         for tileset_elem in root.findall('tileset'):
             firstgid = int(tileset_elem.get('firstgid'))
             
             # Check if external tileset (TSX file)
             if tileset_elem.get('source'):
-                # ---------------------------------------------------------
                 # EXTERNAL TILESET (TSX)
-                # ---------------------------------------------------------
                 # The TMX only contains a reference; actual data is in TSX
                 tsx_path = filepath.parent / tileset_elem.get('source')
                 
@@ -1361,16 +793,12 @@ class TiledMap:
                         source=tileset_elem.get('source')
                     )
             else:
-                # ---------------------------------------------------------
                 # EMBEDDED TILESET
-                # ---------------------------------------------------------
                 tileset = Tileset.from_xml(tileset_elem, firstgid)
             
             map_obj.tilesets.append(tileset)
         
-        # -----------------------------------------------------------------
         # PARSE LAYERS
-        # -----------------------------------------------------------------
         # Iterate through direct children of <map>
         for elem in root:
             if elem.tag == 'layer':
@@ -1388,19 +816,7 @@ class TiledMap:
     
     def save(self, filepath: Union[str, Path], encoding: str = 'csv', 
              compression: Optional[str] = None):
-        """
-        Save the map to a TMX file.
-        
-        Parameters:
-        -----------
-        filepath : str or Path
-            Output file path
-        encoding : str
-            Tile data encoding: 'csv' or 'base64'
-            Default 'csv' for human-readable output
-        compression : str, optional
-            Compression for base64: 'zlib', 'gzip', or None
-        """
+        """Save the map to a TMX file."""
         filepath = Path(filepath)
         
         # Build XML tree
@@ -1444,12 +860,7 @@ class TiledMap:
     
     @staticmethod
     def _indent(elem, level=0):
-        """
-        Add indentation to XML for readable output.
-        
-        ElementTree doesn't include pretty-printing by default.
-        This recursive method adds newlines and spaces.
-        """
+        """Add indentation to XML for readable output."""
         indent = "\n" + "  " * level
         
         if len(elem):  # Has children
@@ -1469,36 +880,7 @@ class TiledMap:
                 elem.tail = indent
     
     def get_tileset_for_gid(self, gid: int) -> Optional[Tileset]:
-        """
-        Find which tileset contains a given GID.
-        
-        Parameters:
-        -----------
-        gid : int
-            Global tile ID
-            
-        Returns:
-        --------
-        Tileset or None : The tileset containing this GID
-        
-        =======================================================================
-        ALGORITHM
-        =======================================================================
-        
-        Tilesets are sorted by firstgid (ascending).
-        A GID belongs to the tileset with the largest firstgid <= gid.
-        
-        Example:
-            Tileset A: firstgid=1
-            Tileset B: firstgid=101
-            Tileset C: firstgid=201
-            
-            GID 50:  50 >= 1, 50 < 101  → Tileset A
-            GID 150: 150 >= 101, 150 < 201 → Tileset B
-            GID 250: 250 >= 201 → Tileset C
-        
-        We iterate backwards (largest firstgid first) for efficiency.
-        """
+        """Find which tileset contains a given GID."""
         # Iterate from last tileset (highest firstgid) to first
         for i in range(len(self.tilesets) - 1, -1, -1):
             if gid >= self.tilesets[i].firstgid:
@@ -1506,18 +888,7 @@ class TiledMap:
         return None
     
     def get_layer_by_name(self, name: str) -> Optional[Union[TileLayer, ObjectGroup, LayerGroup]]:
-        """
-        Find a layer by name (searches recursively through groups).
-        
-        Parameters:
-        -----------
-        name : str
-            Layer name to find
-            
-        Returns:
-        --------
-        Layer or None : The found layer, or None if not found
-        """
+        """Find a layer by name (searches recursively through groups)."""
         def search_layers(layers):
             for layer in layers:
                 if layer.name == name:
@@ -1532,16 +903,7 @@ class TiledMap:
         return search_layers(self.layers)
     
     def get_all_layers_flat(self) -> List[Union[TileLayer, ObjectGroup]]:
-        """
-        Get all layers in a flat list (expanding groups recursively).
-        
-        Useful when you need to iterate through all layers regardless
-        of group hierarchy.
-        
-        Returns:
-        --------
-        List : All TileLayer and ObjectGroup objects (groups themselves excluded)
-        """
+        """Get all layers in a flat list (expanding groups recursively)."""
         result = []
         
         def flatten(layers):
@@ -1556,30 +918,11 @@ class TiledMap:
         return result
 
 
-# =============================================================================
 # UTILITY FUNCTIONS
-# =============================================================================
 
 def create_empty_map(width: int, height: int, tilewidth: int, tileheight: int,
                      orientation: str = "orthogonal") -> TiledMap:
-    """
-    Create an empty map with specified dimensions.
-    
-    Convenience function for creating maps programmatically.
-    
-    Parameters:
-    -----------
-    width, height : int
-        Map size in tiles
-    tilewidth, tileheight : int
-        Tile size in pixels
-    orientation : str
-        Map orientation (default "orthogonal")
-        
-    Returns:
-    --------
-    TiledMap : Empty map ready for adding tilesets and layers
-    """
+    """Create an empty map with specified dimensions."""
     return TiledMap(
         width=width,
         height=height,
@@ -1590,29 +933,14 @@ def create_empty_map(width: int, height: int, tilewidth: int, tileheight: int,
 
 
 def create_layer(name: str, width: int, height: int) -> TileLayer:
-    """
-    Create an empty tile layer filled with GID 0 (empty tiles).
-    
-    Parameters:
-    -----------
-    name : str
-        Layer name
-    width, height : int
-        Layer size in tiles
-        
-    Returns:
-    --------
-    TileLayer : Empty layer ready for setting tiles
-    """
+    """Create an empty tile layer filled with GID 0 (empty tiles)."""
     layer = TileLayer(name=name, width=width, height=height)
     # Initialize with empty tiles (GID 0)
     layer.data.tiles = array.array('I', [0] * (width * height))
     return layer
 
 
-# =============================================================================
 # EXAMPLE USAGE (when run directly)
-# =============================================================================
 
 if __name__ == "__main__":
     print("=" * 60)
