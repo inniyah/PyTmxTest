@@ -120,8 +120,10 @@ class EntityManager:
         for character in self.characters:
             character.update(dt)
 
-    def collect_render_data(self, level_height_offset: float = 0) -> Dict[object, np.ndarray]:
-        """``{textura: vértices}`` de todos los personajes, en coordenadas de mundo.
+    def collect_render_data(self, level_height_offset: float = 0,
+                            max_z: Optional[int] = None) -> Dict[object, np.ndarray]:
+        """``{textura: vértices}`` de los personajes hasta el nivel ``max_z`` (None = todos),
+        en coordenadas de mundo.
 
         Los personajes que comparten spritesheet comparten textura, así que salen en
         el mismo lote. No hace falta ordenar: el depth buffer decide qué queda delante.
@@ -130,6 +132,8 @@ class EntityManager:
 
         groups = defaultdict(list)
         for c in self.characters:
+            if max_z is not None and int(c.z) > max_z:
+                continue
             texture, region = c.get_region()
             rx, ry = c.get_render_position()
             groups[texture].append((rx, ry - c.z * level_height_offset,

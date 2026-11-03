@@ -1,986 +1,838 @@
 #!/usr/bin/env python3
-
 """Lectura, modificación y escritura de archivos TMX (Tiled Map Format).
 
-Soporta TMX 1.11.0 y anteriores.
+Soporta TMX 1.11 y anteriores, incluidos mapas infinitos (chunks).
+
+Ida y vuelta sin pérdidas: todo atributo o elemento que esta librería no modela
+(capas de imagen, animaciones, formas de colisión de tiles, polígonos, textos,
+``editorsettings``, ``nextobjectid``...) se conserva tal cual y se vuelve a
+escribir al guardar. Cada clase lo guarda en ``extra_attrib`` / ``extra_children``.
+
+Sin dependencias fuera de la biblioteca estándar (``zstandard`` solo para zstd).
 """
 
+import array
+import base64
+import copy
+import logging
+import sys
 import xml.etree.ElementTree as ET
-from typing import Optional, List, Dict, Any, Union
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
-import base64
-import zlib
-import array
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+
+log = logging.getLogger(__name__)
+
+# Bits altos de un GID: volteo horizontal, vertical, diagonal y rotación hexagonal
+FLIP_MASK = 0xF0000000
+GID_MASK = 0x0FFFFFFF
 
 
-# PROPERTY CLASS
+# --- Utilidades comunes ---
+
+def _read_extras(obj, elem: ET.Element, known_attrs: Iterable[str], known_tags: Iterable[str]):
+    """Guarda en ``obj`` los atributos e hijos de ``elem`` que no se modelan."""
+    known_attrs, known_tags = set(known_attrs), set(known_tags)
+    obj.extra_attrib = {k: v for k, v in elem.attrib.items() if k not in known_attrs}
+    obj.extra_children = [copy.deepcopy(c) for c in elem if c.tag not in known_tags]
+
+
+def _write_extras(obj, elem: ET.Element, children_first: bool = False):
+    for k, v in obj.extra_attrib.items():
+        elem.set(k, v)
+    extras = [copy.deepcopy(c) for c in obj.extra_children]
+    if children_first:
+        for i, child in enumerate(extras):
+            elem.insert(i, child)
+    else:
+        elem.extend(extras)
+
+
+def _fmt(value: float) -> str:
+    """Número como lo escribe Tiled: '16' en vez de '16.0'."""
+    return str(int(value)) if float(value).is_integer() else str(value)
+
+
+def _set_if(elem: ET.Element, name: str, value, default):
+    if value != default and value is not None:
+        elem.set(name, _fmt(value) if isinstance(value, float) else str(value))
+
+
+def _read_properties(elem: ET.Element) -> Dict[str, "Property"]:
+    props_elem = elem.find("properties")
+    if props_elem is None:
+        return {}
+    return {p.name: p for p in map(Property.from_xml, props_elem.findall("property"))}
+
+
+def _write_properties(elem: ET.Element, properties: Dict[str, "Property"]):
+    if properties:
+        props_elem = ET.SubElement(elem, "properties")
+        for prop in properties.values():
+            props_elem.append(prop.to_xml())
+
+
+def _tiles_from_bytes(raw: bytes) -> array.array:
+    tiles = array.array("I")
+    if tiles.itemsize != 4:                      # plataformas exóticas
+        tiles = array.array("L")
+    tiles.frombytes(raw)
+    if sys.byteorder == "big":                   # TMX siempre es little-endian
+        tiles.byteswap()
+    return tiles
+
+
+def _tiles_to_bytes(tiles: array.array) -> bytes:
+    if sys.byteorder == "big":
+        tiles = array.array(tiles.typecode, tiles)
+        tiles.byteswap()
+    return tiles.tobytes()
+
+
+def _compress(raw: bytes, compression: Optional[str]) -> bytes:
+    if not compression:
+        return raw
+    if compression == "zlib":
+        return zlib.compress(raw)
+    if compression == "gzip":
+        import gzip
+        return gzip.compress(raw)
+    if compression == "zstd":
+        return _zstd().ZstdCompressor().compress(raw)
+    raise ValueError(f"Unsupported compression: {compression}")
+
+
+def _decompress(raw: bytes, compression: Optional[str]) -> bytes:
+    if not compression:
+        return raw
+    if compression == "zlib":
+        return zlib.decompress(raw)
+    if compression == "gzip":
+        import gzip
+        return gzip.decompress(raw)
+    if compression == "zstd":
+        return _zstd().ZstdDecompressor().decompress(raw)
+    raise ValueError(f"Unsupported compression: {compression}")
+
+
+def _zstd():
+    try:
+        import zstandard
+    except ImportError:
+        raise ImportError("zstandard library required for zstd compression. "
+                          "Install with: pip install zstandard") from None
+    return zstandard
+
+
+# --- Propiedades ---
 
 @dataclass
 class Property:
-    """Custom property attached to any TMX element."""
-    name: str                    # Property name (key)
-    type: str = "string"         # Value type
-    value: Any = None            # The actual value
-    
+    """Propiedad custom. ``value`` ya convertido: int, float, bool, str o, para el
+    tipo ``class``, un dict de Property."""
+    name: str
+    type: str = "string"
+    value: Any = None
+    propertytype: Optional[str] = None      # nombre del tipo custom (enum o class)
+
     @classmethod
-    def from_xml(cls, elem: ET.Element) -> 'Property':
-        """Parse property from XML element."""
-        prop_type = elem.get('type', 'string')  # Default to string if not specified
-        value = elem.get('value', '')
-        
-        # TYPE CONVERSION
-        # Convert string value to appropriate Python type
-        # This makes properties usable directly in game code
-        
-        if prop_type == 'int':
-            value = int(value)
-        elif prop_type == 'float':
-            value = float(value)
-        elif prop_type == 'bool':
-            # XML stores as "true"/"false" strings
-            value = value.lower() == 'true'
-        # 'color' se deja como string (#AARRGGBB); parsearlo es cosa del llamador
-            
-        return cls(name=elem.get('name'), type=prop_type, value=value)
-    
+    def from_xml(cls, elem: ET.Element) -> "Property":
+        prop_type = elem.get("type", "string")
+        if prop_type == "class":
+            value = _read_properties(elem)
+        else:
+            # Las cadenas multilínea van como texto del elemento, no como atributo
+            raw = elem.get("value")
+            if raw is None:
+                raw = elem.text or ""
+            value = raw
+            if prop_type in ("int", "object"):
+                value = int(raw or 0)
+            elif prop_type == "float":
+                value = float(raw or 0)
+            elif prop_type == "bool":
+                value = raw.lower() == "true"
+            # color (#AARRGGBB) y file se quedan como string
+        return cls(name=elem.get("name"), type=prop_type, value=value,
+                   propertytype=elem.get("propertytype"))
+
     def to_xml(self) -> ET.Element:
-        """Convert property back to XML element."""
-        elem = ET.Element('property')
-        elem.set('name', self.name)
-        
-        # Only include type attribute if not string (string is default)
-        if self.type != 'string':
-            elem.set('type', self.type)
-        
-        # Convert value to string for XML
-        elem.set('value', str(self.value))
+        elem = ET.Element("property")
+        elem.set("name", self.name)
+        if self.type != "string":
+            elem.set("type", self.type)
+        if self.propertytype:
+            elem.set("propertytype", self.propertytype)
+        if self.type == "class":
+            _write_properties(elem, self.value or {})
+        elif self.type == "bool":
+            elem.set("value", "true" if self.value else "false")
+        elif isinstance(self.value, str) and "\n" in self.value:
+            elem.text = self.value
+        elif isinstance(self.value, float):
+            elem.set("value", _fmt(self.value))
+        else:
+            elem.set("value", "" if self.value is None else str(self.value))
         return elem
 
 
-# IMAGE CLASS
+# --- Imágenes y tilesets ---
 
 @dataclass
 class Image:
-    """Image reference used in tilesets."""
-    source: str                          # Path to image file
-    width: Optional[int] = None          # Image width (pixels)
-    height: Optional[int] = None         # Image height (pixels)
-    trans: Optional[str] = None          # Transparent color (#RRGGBB)
-    
+    source: str
+    width: Optional[int] = None
+    height: Optional[int] = None
+    trans: Optional[str] = None
+    extra_attrib: Dict[str, str] = field(default_factory=dict)
+    extra_children: List[ET.Element] = field(default_factory=list)
+
     @classmethod
-    def from_xml(cls, elem: ET.Element) -> 'Image':
-        """Parse image from XML element."""
-        return cls(
-            source=elem.get('source', ''),
-            # Width/height are optional - use None if not present
-            width=int(elem.get('width')) if elem.get('width') else None,
-            height=int(elem.get('height')) if elem.get('height') else None,
-            trans=elem.get('trans')
-        )
-    
+    def from_xml(cls, elem: ET.Element) -> "Image":
+        img = cls(source=elem.get("source", ""),
+                  width=int(elem.get("width")) if elem.get("width") else None,
+                  height=int(elem.get("height")) if elem.get("height") else None,
+                  trans=elem.get("trans"))
+        _read_extras(img, elem, ("source", "width", "height", "trans"), ())
+        return img
+
     def to_xml(self) -> ET.Element:
-        """Convert image back to XML element."""
-        elem = ET.Element('image')
-        elem.set('source', self.source)
-        
-        # Only include optional attributes if they have values
-        if self.width:
-            elem.set('width', str(self.width))
-        if self.height:
-            elem.set('height', str(self.height))
-        if self.trans:
-            elem.set('trans', self.trans)
+        elem = ET.Element("image")
+        elem.set("source", self.source)
+        _set_if(elem, "trans", self.trans, None)
+        _set_if(elem, "width", self.width, None)
+        _set_if(elem, "height", self.height, None)
+        _write_extras(self, elem)
         return elem
 
-
-# TILE CLASS
 
 @dataclass
 class Tile:
-    """Individual tile within a tileset."""
-    id: int                                          # Local tile ID (within tileset)
-    type: str = ""                                   # Tile type/class
-    properties: Dict[str, Property] = field(default_factory=dict)  # Custom properties
-    image: Optional[Image] = None                    # Image (for collection tilesets)
-    
+    """Tile con metadatos dentro de un tileset. ``type`` es su clase (atributo
+    ``class`` en Tiled 1.9+, ``type`` en versiones anteriores). Las animaciones y
+    las formas de colisión se conservan en ``extra_children``."""
+    id: int
+    type: str = ""
+    properties: Dict[str, Property] = field(default_factory=dict)
+    image: Optional[Image] = None
+    type_attr: str = "class"
+    extra_attrib: Dict[str, str] = field(default_factory=dict)
+    extra_children: List[ET.Element] = field(default_factory=list)
+
     @classmethod
-    def from_xml(cls, elem: ET.Element) -> 'Tile':
-        """Parse tile from XML element."""
-        tile = cls(id=int(elem.get('id', 0)))
-        tile.type = elem.get('type', '')
-        
-        # PARSE PROPERTIES
-        props_elem = elem.find('properties')
-        if props_elem is not None:
-            for prop_elem in props_elem.findall('property'):
-                prop = Property.from_xml(prop_elem)
-                # Store by name for O(1) lookup
-                tile.properties[prop.name] = prop
-        
-        # PARSE IMAGE (for image collection tilesets)
-        img_elem = elem.find('image')
+    def from_xml(cls, elem: ET.Element) -> "Tile":
+        type_attr = "class" if "class" in elem.attrib else "type"
+        tile = cls(id=int(elem.get("id", 0)), type=elem.get(type_attr, ""),
+                   properties=_read_properties(elem), type_attr=type_attr)
+        img_elem = elem.find("image")
         if img_elem is not None:
             tile.image = Image.from_xml(img_elem)
-        
+        _read_extras(tile, elem, ("id", "class", "type"), ("properties", "image"))
         return tile
-    
+
     def to_xml(self) -> ET.Element:
-        """Convert tile back to XML element."""
-        elem = ET.Element('tile')
-        elem.set('id', str(self.id))
-        
+        elem = ET.Element("tile")
+        elem.set("id", str(self.id))
         if self.type:
-            elem.set('type', self.type)
-        
-        # Add properties container if we have any
-        if self.properties:
-            props_elem = ET.SubElement(elem, 'properties')
-            for prop in self.properties.values():
-                props_elem.append(prop.to_xml())
-        
-        # Add image for collection tilesets
+            elem.set(self.type_attr, self.type)
+        _write_properties(elem, self.properties)
         if self.image:
             elem.append(self.image.to_xml())
-        
+        _write_extras(self, elem)
         return elem
 
-
-# TILESET CLASS
 
 @dataclass
 class Tileset:
-    """Tileset collection - a set of tile graphics."""
-    firstgid: int                                    # First Global ID
-    name: str                                        # Tileset name
-    tilewidth: int                                   # Tile width in pixels
-    tileheight: int                                  # Tile height in pixels
-    tilecount: int = 0                               # Total number of tiles
-    columns: int = 0                                 # Tiles per row (for spritesheet)
-    spacing: int = 0                                 # Pixels between tiles
-    margin: int = 0                                  # Pixels around edge
-    image: Optional[Image] = None                    # Spritesheet image
-    tiles: Dict[int, Tile] = field(default_factory=dict)  # Tile metadata
+    firstgid: int
+    name: str
+    tilewidth: int
+    tileheight: int
+    tilecount: int = 0
+    columns: int = 0
+    spacing: int = 0
+    margin: int = 0
+    image: Optional[Image] = None
+    tiles: Dict[int, Tile] = field(default_factory=dict)
     properties: Dict[str, Property] = field(default_factory=dict)
-    source: Optional[str] = None                     # TSX file path (if external)
-    
+    source: Optional[str] = None             # ruta del TSX si es externo
+    extra_attrib: Dict[str, str] = field(default_factory=dict)
+    extra_children: List[ET.Element] = field(default_factory=list)
+
+    _ATTRS = ("firstgid", "source", "name", "tilewidth", "tileheight", "tilecount",
+              "columns", "spacing", "margin")
+
     @classmethod
-    def from_xml(cls, elem: ET.Element, firstgid: int) -> 'Tileset':
-        """Parse tileset from XML element."""
-        tileset = cls(
-            firstgid=firstgid,
-            name=elem.get('name', ''),
-            tilewidth=int(elem.get('tilewidth', 0)),
-            tileheight=int(elem.get('tileheight', 0)),
-            tilecount=int(elem.get('tilecount', 0)),
-            columns=int(elem.get('columns', 0)),
-            spacing=int(elem.get('spacing', 0)),
-            margin=int(elem.get('margin', 0)),
-            source=elem.get('source')
-        )
-        
-        # Parse properties
-        props_elem = elem.find('properties')
-        if props_elem is not None:
-            for prop_elem in props_elem.findall('property'):
-                prop = Property.from_xml(prop_elem)
-                tileset.properties[prop.name] = prop
-        
-        # Parse tileset image (for spritesheet tilesets)
-        img_elem = elem.find('image')
+    def from_xml(cls, elem: ET.Element, firstgid: int) -> "Tileset":
+        ts = cls(firstgid=firstgid, name=elem.get("name", ""),
+                 tilewidth=int(elem.get("tilewidth", 0)),
+                 tileheight=int(elem.get("tileheight", 0)),
+                 tilecount=int(elem.get("tilecount", 0)),
+                 columns=int(elem.get("columns", 0)),
+                 spacing=int(elem.get("spacing", 0)),
+                 margin=int(elem.get("margin", 0)),
+                 source=elem.get("source"),
+                 properties=_read_properties(elem))
+        img_elem = elem.find("image")
         if img_elem is not None:
-            tileset.image = Image.from_xml(img_elem)
-        
-        # Parse individual tile definitions
-        # Only tiles with metadata (properties, animations, images) are listed
-        for tile_elem in elem.findall('tile'):
+            ts.image = Image.from_xml(img_elem)
+        for tile_elem in elem.findall("tile"):
             tile = Tile.from_xml(tile_elem)
-            tileset.tiles[tile.id] = tile
-        
-        return tileset
-    
+            ts.tiles[tile.id] = tile
+        # tileoffset, grid, wangsets, transformations... se conservan
+        _read_extras(ts, elem, cls._ATTRS, ("properties", "image", "tile"))
+        return ts
+
     def to_xml(self, include_firstgid: bool = True) -> ET.Element:
-        """Convert tileset back to XML element."""
-        elem = ET.Element('tileset')
-        
+        elem = ET.Element("tileset")
         if include_firstgid:
-            elem.set('firstgid', str(self.firstgid))
-        
-        # If this is an external tileset reference, only output source
-        if self.source:
-            elem.set('source', self.source)
-            return elem  # External tilesets only have firstgid and source
-        
-        # Full tileset definition
-        elem.set('name', self.name)
-        elem.set('tilewidth', str(self.tilewidth))
-        elem.set('tileheight', str(self.tileheight))
-        elem.set('tilecount', str(self.tilecount))
-        elem.set('columns', str(self.columns))
-        
-        # Only include spacing/margin if non-zero
-        if self.spacing:
-            elem.set('spacing', str(self.spacing))
-        if self.margin:
-            elem.set('margin', str(self.margin))
-        
-        # Properties
-        if self.properties:
-            props_elem = ET.SubElement(elem, 'properties')
-            for prop in self.properties.values():
-                props_elem.append(prop.to_xml())
-        
-        # Tileset image
+            elem.set("firstgid", str(self.firstgid))
+        if self.source:                         # externo: el TSX no se toca
+            elem.set("source", self.source)
+            return elem
+        elem.set("name", self.name)
+        elem.set("tilewidth", str(self.tilewidth))
+        elem.set("tileheight", str(self.tileheight))
+        _set_if(elem, "spacing", self.spacing, 0)
+        _set_if(elem, "margin", self.margin, 0)
+        elem.set("tilecount", str(self.tilecount))
+        elem.set("columns", str(self.columns))
+        for k, v in self.extra_attrib.items():
+            elem.set(k, v)
+        # Orden de Tiled: hijos desconocidos tipo tileoffset/grid antes que la imagen
+        head = [c for c in self.extra_children if c.tag in ("tileoffset", "grid")]
+        tail = [c for c in self.extra_children if c not in head]
+        elem.extend([copy.deepcopy(c) for c in head])
+        _write_properties(elem, self.properties)
         if self.image:
             elem.append(self.image.to_xml())
-        
-        # Individual tile definitions
+        elem.extend([copy.deepcopy(c) for c in tail])
         for tile in self.tiles.values():
             elem.append(tile.to_xml())
-        
         return elem
 
+    def contains(self, gid: int) -> bool:
+        local = (gid & GID_MASK) - self.firstgid
+        return 0 <= local < max(self.tilecount, 1)
 
-# LAYER DATA CLASS
+
+# --- Datos de capas ---
+
+@dataclass
+class Chunk:
+    """Trozo de un mapa infinito. x, y pueden ser negativos."""
+    x: int
+    y: int
+    width: int
+    height: int
+    tiles: array.array = field(default_factory=lambda: array.array("I"))
+
+
+def _decode_tiles(elem: ET.Element, encoding: Optional[str],
+                  compression: Optional[str]) -> array.array:
+    if encoding == "csv":
+        text = (elem.text or "").replace("\n", "")
+        return array.array("I", [int(v) for v in text.split(",") if v.strip()])
+    if encoding == "base64":
+        raw = base64.b64decode((elem.text or "").strip())
+        return _tiles_from_bytes(_decompress(raw, compression))
+    return array.array("I", [int(t.get("gid", 0)) for t in elem.findall("tile")])
+
+
+def _encode_tiles(elem: ET.Element, tiles: array.array, width: int,
+                  encoding: str, compression: Optional[str]):
+    if encoding == "csv":
+        rows = [",".join(map(str, tiles[y * width:(y + 1) * width]))
+                for y in range(len(tiles) // width if width else 0)]
+        elem.text = "\n" + ",\n".join(rows) + "\n"
+    elif encoding == "base64":
+        raw = _compress(_tiles_to_bytes(tiles), compression)
+        elem.text = "\n" + base64.b64encode(raw).decode("ascii") + "\n"
+    else:
+        raise ValueError(f"Unsupported encoding: {encoding}")
+
 
 @dataclass
 class LayerData:
-    """Tile layer data storage and encoding."""
-    encoding: Optional[str] = None      # csv, base64, or None (XML)
-    compression: Optional[str] = None   # gzip, zlib, zstd, or None
-    tiles: array.array = field(default_factory=lambda: array.array('I'))
-    
+    """GIDs de una capa. En mapas finitos, ``tiles`` (fila a fila); en infinitos, ``chunks``."""
+    encoding: Optional[str] = None          # csv, base64 o None (XML antiguo)
+    compression: Optional[str] = None       # zlib, gzip, zstd o None
+    tiles: array.array = field(default_factory=lambda: array.array("I"))
+    chunks: List[Chunk] = field(default_factory=list)
+
     def decode_data(self, data_elem: ET.Element, width: int, height: int):
-        """Decode tile data from XML element."""
-        encoding = data_elem.get('encoding')
-        compression = data_elem.get('compression')
-        
-        if encoding == 'csv':
-            # CSV FORMAT
-            # Data looks like: "1,2,3,4,\n5,6,7,8,\n..."
-            # Each number is a GID (Global ID)
-            csv_data = data_elem.text.strip()
-            
-            # Remove newlines, split by comma, convert to integers
-            # Filter empty strings (trailing commas create empty elements)
-            gids = [int(x) for x in csv_data.replace('\n', '').split(',') 
-                    if x.strip()]
-            self.tiles = array.array('I', gids)
-            
-        elif encoding == 'base64':
-            # BASE64 FORMAT
-            # Binary data encoded as Base64 string
-            b64_data = data_elem.text.strip()
-            raw_data = base64.b64decode(b64_data)
-            
-            # DECOMPRESSION (if compressed)
-            if compression == 'zlib':
-                raw_data = zlib.decompress(raw_data)
-                
-            elif compression == 'gzip':
-                import gzip
-                raw_data = gzip.decompress(raw_data)
-                
-            elif compression == 'zstd':
-                # zstd requires external library (not in stdlib)
-                try:
-                    import zstandard as zstd
-                    dctx = zstd.ZstdDecompressor()
-                    raw_data = dctx.decompress(raw_data)
-                except ImportError:
-                    raise ImportError(
-                        "zstandard library required for zstd compression. "
-                        "Install with: pip install zstandard"
-                    )
-            
-            # CONVERT BYTES TO UINT32 ARRAY
-            # Each tile is 4 bytes (little-endian uint32)
-            # Total tiles = bytes / 4
-            self.tiles = array.array('I')
-            self.tiles.frombytes(raw_data)
-            
+        self.encoding = data_elem.get("encoding")
+        self.compression = data_elem.get("compression")
+        chunk_elems = data_elem.findall("chunk")
+        if chunk_elems:
+            self.chunks = []
+            for c in chunk_elems:
+                self.chunks.append(Chunk(int(c.get("x")), int(c.get("y")),
+                                         int(c.get("width")), int(c.get("height")),
+                                         _decode_tiles(c, self.encoding, self.compression)))
+            self.tiles = array.array("I")
         else:
-            # XML FORMAT (deprecated)
-            # Each tile is an element: <tile gid="5"/>
-            gids = []
-            for tile_elem in data_elem.findall('tile'):
-                gid = int(tile_elem.get('gid', 0))
-                gids.append(gid)
-            self.tiles = array.array('I', gids)
-        
-        # Store encoding info for round-trip saving
-        self.encoding = encoding
-        self.compression = compression
-    
+            self.tiles = _decode_tiles(data_elem, self.encoding, self.compression)
+
     def to_xml(self, width: int, height: int) -> ET.Element:
-        """Convert tile data back to XML element."""
-        elem = ET.Element('data')
-        
-        # Default to CSV if no encoding set (readable, debuggable)
+        elem = ET.Element("data")
         if not self.encoding:
-            self.encoding = 'csv'
-        
-        elem.set('encoding', self.encoding)
+            self.encoding = "csv"               # el formato XML antiguo no se escribe
+        elem.set("encoding", self.encoding)
         if self.compression:
-            elem.set('compression', self.compression)
-        
-        if self.encoding == 'csv':
-            # CSV OUTPUT
-            # Format as rows for readability
-            csv_lines = []
-            for y in range(height):
-                row_start = y * width
-                row_end = row_start + width
-                # Join GIDs with commas
-                row = ','.join(str(gid) for gid in self.tiles[row_start:row_end])
-                csv_lines.append(row)
-            
-            # Combine rows with newlines, wrap in newlines for formatting
-            elem.text = '\n' + ',\n'.join(csv_lines) + '\n'
-            
-        elif self.encoding == 'base64':
-            # BASE64 OUTPUT
-            # Convert array to bytes
-            raw_data = self.tiles.tobytes()
-            
-            # Compress if requested
-            if self.compression == 'zlib':
-                raw_data = zlib.compress(raw_data)
-            elif self.compression == 'gzip':
-                import gzip
-                raw_data = gzip.compress(raw_data)
-            elif self.compression == 'zstd':
-                try:
-                    import zstandard as zstd
-                except ImportError:
-                    raise ImportError('zstandard library required for zstd compression. '
-                                      'Install with: pip install zstandard')
-                raw_data = zstd.ZstdCompressor().compress(raw_data)
-            elif self.compression:
-                raise ValueError(f'Unsupported compression: {self.compression}')
-            
-            # Encode to Base64
-            b64_data = base64.b64encode(raw_data).decode('ascii')
-            elem.text = '\n' + b64_data + '\n'
-        
+            elem.set("compression", self.compression)
+        if self.chunks:
+            for ch in self.chunks:
+                c = ET.SubElement(elem, "chunk", x=str(ch.x), y=str(ch.y),
+                                  width=str(ch.width), height=str(ch.height))
+                _encode_tiles(c, ch.tiles, ch.width, self.encoding, self.compression)
+        else:
+            _encode_tiles(elem, self.tiles, width, self.encoding, self.compression)
         return elem
 
 
-# TILE LAYER CLASS
+# --- Capas ---
+
+_COMMON_LAYER_ATTRS = ("id", "name", "class", "visible", "opacity", "offsetx", "offsety",
+                       "parallaxx", "parallaxy", "tintcolor")
+
+
+def _read_common(layer, elem: ET.Element):
+    layer.name = elem.get("name", "")
+    layer.id = int(elem.get("id", 0))
+    layer.klass = elem.get("class", "")
+    layer.visible = elem.get("visible", "1") == "1"
+    layer.opacity = float(elem.get("opacity", 1.0))
+    layer.offsetx = float(elem.get("offsetx", 0))
+    layer.offsety = float(elem.get("offsety", 0))
+    layer.parallaxx = float(elem.get("parallaxx", 1.0))
+    layer.parallaxy = float(elem.get("parallaxy", 1.0))
+    layer.tintcolor = elem.get("tintcolor")
+    layer.properties = _read_properties(elem)
+
+
+def _write_common(layer, elem: ET.Element):
+    elem.set("id", str(layer.id))
+    elem.set("name", layer.name)
+    _set_if(elem, "class", layer.klass, "")
+    _set_if(elem, "visible", None if layer.visible else 0, None)
+    _set_if(elem, "opacity", layer.opacity, 1.0)
+    _set_if(elem, "tintcolor", layer.tintcolor, None)
+    _set_if(elem, "offsetx", layer.offsetx, 0)
+    _set_if(elem, "offsety", layer.offsety, 0)
+    _set_if(elem, "parallaxx", layer.parallaxx, 1.0)
+    _set_if(elem, "parallaxy", layer.parallaxy, 1.0)
+
 
 @dataclass
 class TileLayer:
-    """Tile layer - a grid of tile references."""
-    name: str                                        # Layer name
-    width: int                                       # Width in tiles
-    height: int                                      # Height in tiles
-    id: int = 0                                      # Unique layer ID
-    visible: bool = True                             # Is layer rendered?
-    opacity: float = 1.0                             # Transparency
-    offsetx: float = 0                               # X pixel offset
-    offsety: float = 0                               # Y pixel offset
-    parallaxx: float = 1.0                           # Parallax X factor
-    parallaxy: float = 1.0                           # Parallax Y factor
-    tintcolor: Optional[str] = None                  # Color tint (#AARRGGBB)
+    name: str
+    width: int
+    height: int
+    id: int = 0
+    klass: str = ""                          # clase de la capa en Tiled (atributo "class")
+    visible: bool = True
+    opacity: float = 1.0
+    offsetx: float = 0
+    offsety: float = 0
+    parallaxx: float = 1.0
+    parallaxy: float = 1.0
+    tintcolor: Optional[str] = None
     properties: Dict[str, Property] = field(default_factory=dict)
     data: LayerData = field(default_factory=LayerData)
-    
+    extra_attrib: Dict[str, str] = field(default_factory=dict)
+    extra_children: List[ET.Element] = field(default_factory=list)
+
     @classmethod
-    def from_xml(cls, elem: ET.Element) -> 'TileLayer':
-        """Parse tile layer from XML element."""
-        layer = cls(
-            name=elem.get('name', ''),
-            width=int(elem.get('width', 0)),
-            height=int(elem.get('height', 0)),
-            id=int(elem.get('id', 0)),
-            # '1' is default for visible (absent means visible)
-            visible=elem.get('visible', '1') == '1',
-            opacity=float(elem.get('opacity', 1.0)),
-            offsetx=float(elem.get('offsetx', 0)),
-            offsety=float(elem.get('offsety', 0)),
-            parallaxx=float(elem.get('parallaxx', 1.0)),
-            parallaxy=float(elem.get('parallaxy', 1.0)),
-            tintcolor=elem.get('tintcolor')
-        )
-        
-        # Parse properties
-        props_elem = elem.find('properties')
-        if props_elem is not None:
-            for prop_elem in props_elem.findall('property'):
-                prop = Property.from_xml(prop_elem)
-                layer.properties[prop.name] = prop
-        
-        # Parse tile data
-        data_elem = elem.find('data')
+    def from_xml(cls, elem: ET.Element) -> "TileLayer":
+        layer = cls(name="", width=int(elem.get("width", 0)), height=int(elem.get("height", 0)))
+        _read_common(layer, elem)
+        data_elem = elem.find("data")
         if data_elem is not None:
-            layer.data = LayerData()
             layer.data.decode_data(data_elem, layer.width, layer.height)
-        
+        _read_extras(layer, elem, _COMMON_LAYER_ATTRS + ("width", "height"),
+                     ("properties", "data"))
         return layer
-    
+
     def to_xml(self) -> ET.Element:
-        """Convert tile layer back to XML element."""
-        elem = ET.Element('layer')
-        elem.set('id', str(self.id))
-        elem.set('name', self.name)
-        elem.set('width', str(self.width))
-        elem.set('height', str(self.height))
-        
-        # Only include non-default values (reduces file size)
-        if not self.visible:
-            elem.set('visible', '0')
-        if self.opacity != 1.0:
-            elem.set('opacity', str(self.opacity))
-        if self.offsetx:
-            elem.set('offsetx', str(self.offsetx))
-        if self.offsety:
-            elem.set('offsety', str(self.offsety))
-        if self.parallaxx != 1.0:
-            elem.set('parallaxx', str(self.parallaxx))
-        if self.parallaxy != 1.0:
-            elem.set('parallaxy', str(self.parallaxy))
-        if self.tintcolor:
-            elem.set('tintcolor', self.tintcolor)
-        
-        # Properties
-        if self.properties:
-            props_elem = ET.SubElement(elem, 'properties')
-            for prop in self.properties.values():
-                props_elem.append(prop.to_xml())
-        
-        # Tile data
+        elem = ET.Element("layer")
+        _write_common(self, elem)
+        elem.set("width", str(self.width))
+        elem.set("height", str(self.height))
+        _write_extras(self, elem)
+        _write_properties(elem, self.properties)
         elem.append(self.data.to_xml(self.width, self.height))
-        
         return elem
-    
+
+    # --- Acceso a tiles (finitos e infinitos) ---
+
+    @property
+    def is_infinite(self) -> bool:
+        return bool(self.data.chunks)
+
+    def _chunk_at(self, x: int, y: int) -> Optional[Chunk]:
+        for ch in self.data.chunks:
+            if ch.x <= x < ch.x + ch.width and ch.y <= y < ch.y + ch.height:
+                return ch
+        return None
+
     def get_tile_gid(self, x: int, y: int) -> int:
-        """Get the GID of the tile at position (x, y)."""
+        """GID en (x, y), con bits de flip incluidos. Fuera de la capa: 0."""
+        if self.is_infinite:
+            ch = self._chunk_at(x, y)
+            return ch.tiles[(y - ch.y) * ch.width + (x - ch.x)] if ch else 0
         if 0 <= x < self.width and 0 <= y < self.height:
-            # Convert 2D coords to 1D index: row-major order
-            index = y * self.width + x
-            return self.data.tiles[index]
-        return 0  # Out of bounds = empty
-    
-    def set_tile_gid(self, x: int, y: int, gid: int):
-        """Set the GID of the tile at position (x, y)."""
-        if 0 <= x < self.width and 0 <= y < self.height:
-            index = y * self.width + x
-            self.data.tiles[index] = gid
+            return self.data.tiles[y * self.width + x]
+        return 0
 
+    def set_tile_gid(self, x: int, y: int, gid: int, chunk_size: int = 16):
+        if self.is_infinite:
+            ch = self._chunk_at(x, y)
+            if ch is None:                       # crea el chunk alineado que falta
+                cx, cy = x // chunk_size * chunk_size, y // chunk_size * chunk_size
+                ch = Chunk(cx, cy, chunk_size, chunk_size,
+                           array.array("I", [0] * chunk_size * chunk_size))
+                self.data.chunks.append(ch)
+            ch.tiles[(y - ch.y) * ch.width + (x - ch.x)] = gid
+        elif 0 <= x < self.width and 0 <= y < self.height:
+            self.data.tiles[y * self.width + x] = gid
 
-# MAP OBJECT CLASS
+    def bounds(self) -> Tuple[int, int, int, int]:
+        """(x0, y0, x1, y1) en tiles que cubren los datos. En infinitos, la caja de los chunks."""
+        if not self.is_infinite:
+            return 0, 0, self.width, self.height
+        return (min(c.x for c in self.data.chunks), min(c.y for c in self.data.chunks),
+                max(c.x + c.width for c in self.data.chunks),
+                max(c.y + c.height for c in self.data.chunks))
+
+    def dense_tiles(self, x0: int, y0: int, width: int, height: int) -> array.array:
+        """GIDs de la región dada, fila a fila (0 donde no hay datos)."""
+        out = array.array("I", [0] * (width * height))
+        if not self.is_infinite:
+            for y in range(max(0, y0), min(self.height, y0 + height)):
+                sx0, sx1 = max(0, x0), min(self.width, x0 + width)
+                if sx0 < sx1:
+                    out[(y - y0) * width + sx0 - x0:(y - y0) * width + sx1 - x0] = \
+                        self.data.tiles[y * self.width + sx0:y * self.width + sx1]
+            return out
+        for ch in self.data.chunks:
+            for row in range(ch.height):
+                y = ch.y + row
+                if not y0 <= y < y0 + height:
+                    continue
+                sx0, sx1 = max(ch.x, x0), min(ch.x + ch.width, x0 + width)
+                if sx0 < sx1:
+                    out[(y - y0) * width + sx0 - x0:(y - y0) * width + sx1 - x0] = \
+                        ch.tiles[row * ch.width + sx0 - ch.x:row * ch.width + sx1 - ch.x]
+        return out
+
 
 @dataclass
 class MapObject:
-    """Object in an object layer."""
-    id: int                                          # Unique object ID
-    name: str = ""                                   # Object name
-    type: str = ""                                   # Object type/class
-    x: float = 0                                     # X position
-    y: float = 0                                     # Y position
-    width: float = 0                                 # Width (0 for points)
-    height: float = 0                                # Height (0 for points)
-    rotation: float = 0                              # Rotation in degrees
-    gid: Optional[int] = None                        # Tile GID (for tile objects)
-    visible: bool = True                             # Is object visible?
+    """Objeto de una capa de objetos. Polígonos, puntos, elipses, textos y plantillas
+    se conservan en ``extra_children`` / ``extra_attrib``."""
+    id: int
+    name: str = ""
+    type: str = ""                           # clase (atributo "class" o "type")
+    x: float = 0
+    y: float = 0
+    width: float = 0
+    height: float = 0
+    rotation: float = 0
+    gid: Optional[int] = None
+    visible: bool = True
     properties: Dict[str, Property] = field(default_factory=dict)
-    
+    type_attr: str = "class"
+    extra_attrib: Dict[str, str] = field(default_factory=dict)
+    extra_children: List[ET.Element] = field(default_factory=list)
+
     @classmethod
-    def from_xml(cls, elem: ET.Element) -> 'MapObject':
-        """Parse object from XML element."""
-        obj = cls(
-            id=int(elem.get('id', 0)),
-            name=elem.get('name', ''),
-            type=elem.get('type', ''),
-            x=float(elem.get('x', 0)),
-            y=float(elem.get('y', 0)),
-            width=float(elem.get('width', 0)),
-            height=float(elem.get('height', 0)),
-            rotation=float(elem.get('rotation', 0)),
-            visible=elem.get('visible', '1') == '1'
-        )
-        
-        # GID only present for tile objects
-        if elem.get('gid'):
-            obj.gid = int(elem.get('gid'))
-        
-        # Properties
-        props_elem = elem.find('properties')
-        if props_elem is not None:
-            for prop_elem in props_elem.findall('property'):
-                prop = Property.from_xml(prop_elem)
-                obj.properties[prop.name] = prop
-        
+    def from_xml(cls, elem: ET.Element) -> "MapObject":
+        type_attr = "class" if "class" in elem.attrib else "type"
+        obj = cls(id=int(elem.get("id", 0)), name=elem.get("name", ""),
+                  type=elem.get(type_attr, ""), type_attr=type_attr,
+                  x=float(elem.get("x", 0)), y=float(elem.get("y", 0)),
+                  width=float(elem.get("width", 0)), height=float(elem.get("height", 0)),
+                  rotation=float(elem.get("rotation", 0)),
+                  visible=elem.get("visible", "1") == "1",
+                  properties=_read_properties(elem))
+        if elem.get("gid"):
+            obj.gid = int(elem.get("gid"))
+        _read_extras(obj, elem, ("id", "name", "class", "type", "x", "y", "width", "height",
+                                 "rotation", "gid", "visible"), ("properties",))
         return obj
-    
-    def to_xml(self) -> ET.Element:
-        """Convert object back to XML element."""
-        elem = ET.Element('object')
-        elem.set('id', str(self.id))
-        
-        # Only include non-empty optional attributes
-        if self.name:
-            elem.set('name', self.name)
-        if self.type:
-            elem.set('type', self.type)
-        
-        # Position is always included
-        elem.set('x', str(self.x))
-        elem.set('y', str(self.y))
-        
-        # Size only if non-zero
-        if self.width:
-            elem.set('width', str(self.width))
-        if self.height:
-            elem.set('height', str(self.height))
-        if self.rotation:
-            elem.set('rotation', str(self.rotation))
+
+    @property
+    def shape(self) -> str:
+        """rectangle, ellipse, point, polygon, polyline, text o tile."""
         if self.gid is not None:
-            elem.set('gid', str(self.gid))
-        if not self.visible:
-            elem.set('visible', '0')
-        
-        # Properties
-        if self.properties:
-            props_elem = ET.SubElement(elem, 'properties')
-            for prop in self.properties.values():
-                props_elem.append(prop.to_xml())
-        
+            return "tile"
+        for child in self.extra_children:
+            if child.tag in ("ellipse", "point", "polygon", "polyline", "text"):
+                return child.tag
+        return "rectangle"
+
+    def to_xml(self) -> ET.Element:
+        elem = ET.Element("object")
+        elem.set("id", str(self.id))
+        _set_if(elem, "name", self.name, "")
+        if self.type:
+            elem.set(self.type_attr, self.type)
+        _set_if(elem, "gid", self.gid, None)
+        elem.set("x", _fmt(self.x))
+        elem.set("y", _fmt(self.y))
+        _set_if(elem, "width", float(self.width), 0.0)
+        _set_if(elem, "height", float(self.height), 0.0)
+        _set_if(elem, "rotation", float(self.rotation), 0.0)
+        _set_if(elem, "visible", None if self.visible else 0, None)
+        for k, v in self.extra_attrib.items():
+            elem.set(k, v)
+        _write_properties(elem, self.properties)
+        elem.extend([copy.deepcopy(c) for c in self.extra_children])
         return elem
 
-
-# OBJECT GROUP CLASS
 
 @dataclass
 class ObjectGroup:
-    """Object layer - contains vector objects."""
-    name: str                                        # Layer name
-    id: int = 0                                      # Unique layer ID
-    visible: bool = True                             # Is layer visible?
-    opacity: float = 1.0                             # Transparency
-    offsetx: float = 0                               # X pixel offset
-    offsety: float = 0                               # Y pixel offset
-    parallaxx: float = 1.0                           # Parallax X factor
-    parallaxy: float = 1.0                           # Parallax Y factor
-    tintcolor: Optional[str] = None                  # Color tint
+    name: str
+    id: int = 0
+    klass: str = ""
+    visible: bool = True
+    opacity: float = 1.0
+    offsetx: float = 0
+    offsety: float = 0
+    parallaxx: float = 1.0
+    parallaxy: float = 1.0
+    tintcolor: Optional[str] = None
     properties: Dict[str, Property] = field(default_factory=dict)
     objects: List[MapObject] = field(default_factory=list)
-    
+    extra_attrib: Dict[str, str] = field(default_factory=dict)
+    extra_children: List[ET.Element] = field(default_factory=list)
+
     @classmethod
-    def from_xml(cls, elem: ET.Element) -> 'ObjectGroup':
-        """Parse object group from XML element."""
-        group = cls(
-            name=elem.get('name', ''),
-            id=int(elem.get('id', 0)),
-            visible=elem.get('visible', '1') == '1',
-            opacity=float(elem.get('opacity', 1.0)),
-            offsetx=float(elem.get('offsetx', 0)),
-            offsety=float(elem.get('offsety', 0)),
-            parallaxx=float(elem.get('parallaxx', 1.0)),
-            parallaxy=float(elem.get('parallaxy', 1.0)),
-            tintcolor=elem.get('tintcolor')
-        )
-        
-        # Properties
-        props_elem = elem.find('properties')
-        if props_elem is not None:
-            for prop_elem in props_elem.findall('property'):
-                prop = Property.from_xml(prop_elem)
-                group.properties[prop.name] = prop
-        
-        # Objects
-        for obj_elem in elem.findall('object'):
-            obj = MapObject.from_xml(obj_elem)
-            group.objects.append(obj)
-        
+    def from_xml(cls, elem: ET.Element) -> "ObjectGroup":
+        group = cls(name="")
+        _read_common(group, elem)
+        group.objects = [MapObject.from_xml(o) for o in elem.findall("object")]
+        _read_extras(group, elem, _COMMON_LAYER_ATTRS, ("properties", "object"))
         return group
-    
+
     def to_xml(self) -> ET.Element:
-        """Convert object group back to XML element."""
-        elem = ET.Element('objectgroup')
-        elem.set('id', str(self.id))
-        elem.set('name', self.name)
-        
-        if not self.visible:
-            elem.set('visible', '0')
-        if self.opacity != 1.0:
-            elem.set('opacity', str(self.opacity))
-        if self.offsetx:
-            elem.set('offsetx', str(self.offsetx))
-        if self.offsety:
-            elem.set('offsety', str(self.offsety))
-        if self.parallaxx != 1.0:
-            elem.set('parallaxx', str(self.parallaxx))
-        if self.parallaxy != 1.0:
-            elem.set('parallaxy', str(self.parallaxy))
-        if self.tintcolor:
-            elem.set('tintcolor', self.tintcolor)
-        
-        if self.properties:
-            props_elem = ET.SubElement(elem, 'properties')
-            for prop in self.properties.values():
-                props_elem.append(prop.to_xml())
-        
-        for obj in self.objects:
-            elem.append(obj.to_xml())
-        
+        elem = ET.Element("objectgroup")
+        _write_common(self, elem)
+        _write_extras(self, elem)
+        _write_properties(elem, self.properties)
+        elem.extend([obj.to_xml() for obj in self.objects])
         return elem
 
 
-# LAYER GROUP CLASS
+@dataclass
+class RawLayer:
+    """Capa de un tipo no modelado (p. ej. ``imagelayer``): se conserva el XML tal cual."""
+    element: ET.Element
+
+    @property
+    def name(self) -> str:
+        return self.element.get("name", "")
+
+    @property
+    def tag(self) -> str:
+        return self.element.tag
+
+    @property
+    def visible(self) -> bool:
+        return self.element.get("visible", "1") == "1"
+
+    def to_xml(self) -> ET.Element:
+        return copy.deepcopy(self.element)
+
+
+AnyLayer = Union[TileLayer, ObjectGroup, "LayerGroup", RawLayer]
+
+
+def _parse_layer(elem: ET.Element) -> Optional[AnyLayer]:
+    if elem.tag == "layer":
+        return TileLayer.from_xml(elem)
+    if elem.tag == "objectgroup":
+        return ObjectGroup.from_xml(elem)
+    if elem.tag == "group":
+        return LayerGroup.from_xml(elem)
+    if elem.tag == "imagelayer":
+        return RawLayer(copy.deepcopy(elem))
+    return None
+
 
 @dataclass
 class LayerGroup:
-    """Group of layers - a folder containing other layers."""
-    name: str                                        # Group name
-    id: int = 0                                      # Unique ID
-    visible: bool = True                             # Is group visible?
-    opacity: float = 1.0                             # Transparency (affects all children)
-    offsetx: float = 0                               # X offset (affects all children)
-    offsety: float = 0                               # Y offset
-    parallaxx: float = 1.0                           # Parallax X
-    parallaxy: float = 1.0                           # Parallax Y
-    tintcolor: Optional[str] = None                  # Color tint
+    name: str
+    id: int = 0
+    klass: str = ""
+    visible: bool = True
+    opacity: float = 1.0
+    offsetx: float = 0
+    offsety: float = 0
+    parallaxx: float = 1.0
+    parallaxy: float = 1.0
+    tintcolor: Optional[str] = None
     properties: Dict[str, Property] = field(default_factory=dict)
-    # Recursive type: can contain TileLayer, ObjectGroup, or more LayerGroups
-    layers: List[Union['TileLayer', 'ObjectGroup', 'LayerGroup']] = field(default_factory=list)
-    
+    layers: List[AnyLayer] = field(default_factory=list)
+    extra_attrib: Dict[str, str] = field(default_factory=dict)
+    extra_children: List[ET.Element] = field(default_factory=list)
+
+    _LAYER_TAGS = ("layer", "objectgroup", "group", "imagelayer")
+
     @classmethod
-    def from_xml(cls, elem: ET.Element) -> 'LayerGroup':
-        """Parse layer group from XML element."""
-        group = cls(
-            name=elem.get('name', ''),
-            id=int(elem.get('id', 0)),
-            visible=elem.get('visible', '1') == '1',
-            opacity=float(elem.get('opacity', 1.0)),
-            offsetx=float(elem.get('offsetx', 0)),
-            offsety=float(elem.get('offsety', 0)),
-            parallaxx=float(elem.get('parallaxx', 1.0)),
-            parallaxy=float(elem.get('parallaxy', 1.0)),
-            tintcolor=elem.get('tintcolor')
-        )
-        
-        # Properties
-        props_elem = elem.find('properties')
-        if props_elem is not None:
-            for prop_elem in props_elem.findall('property'):
-                prop = Property.from_xml(prop_elem)
-                group.properties[prop.name] = prop
-        
-        # RECURSIVELY LOAD CHILD LAYERS
-        # Groups can contain any layer type, including nested groups
-        for child in elem:
-            if child.tag == 'layer':
-                layer = TileLayer.from_xml(child)
-                group.layers.append(layer)
-            elif child.tag == 'objectgroup':
-                obj_group = ObjectGroup.from_xml(child)
-                group.layers.append(obj_group)
-            elif child.tag == 'group':
-                # Recursive: group within group
-                sub_group = LayerGroup.from_xml(child)
-                group.layers.append(sub_group)
-        
+    def from_xml(cls, elem: ET.Element) -> "LayerGroup":
+        group = cls(name="")
+        _read_common(group, elem)
+        group.layers = [l for l in map(_parse_layer, elem) if l is not None]
+        _read_extras(group, elem, _COMMON_LAYER_ATTRS, ("properties",) + cls._LAYER_TAGS)
         return group
-    
+
     def to_xml(self) -> ET.Element:
-        """Convert layer group back to XML element."""
-        elem = ET.Element('group')
-        elem.set('id', str(self.id))
-        elem.set('name', self.name)
-        
-        if not self.visible:
-            elem.set('visible', '0')
-        if self.opacity != 1.0:
-            elem.set('opacity', str(self.opacity))
-        if self.offsetx:
-            elem.set('offsetx', str(self.offsetx))
-        if self.offsety:
-            elem.set('offsety', str(self.offsety))
-        if self.parallaxx != 1.0:
-            elem.set('parallaxx', str(self.parallaxx))
-        if self.parallaxy != 1.0:
-            elem.set('parallaxy', str(self.parallaxy))
-        if self.tintcolor:
-            elem.set('tintcolor', self.tintcolor)
-        
-        if self.properties:
-            props_elem = ET.SubElement(elem, 'properties')
-            for prop in self.properties.values():
-                props_elem.append(prop.to_xml())
-        
-        # Recursively convert child layers
-        for layer in self.layers:
-            elem.append(layer.to_xml())
-        
+        elem = ET.Element("group")
+        _write_common(self, elem)
+        _write_extras(self, elem)
+        _write_properties(elem, self.properties)
+        elem.extend([layer.to_xml() for layer in self.layers])
         return elem
 
 
-# TILED MAP CLASS (Main Entry Point)
+# --- Mapa ---
 
 @dataclass
 class TiledMap:
-    """Complete Tiled map - the root object for TMX files."""
-    version: str = "1.10"                            # TMX format version
-    tiledversion: str = ""                           # Tiled editor version
-    orientation: str = "orthogonal"                  # Map orientation
-    renderorder: str = "right-down"                  # Render order
-    width: int = 0                                   # Map width in tiles
-    height: int = 0                                  # Map height in tiles
-    tilewidth: int = 0                               # Tile width in pixels
-    tileheight: int = 0                              # Tile height in pixels
-    infinite: bool = False                           # Is map infinite?
+    version: str = "1.10"
+    tiledversion: str = ""
+    orientation: str = "orthogonal"
+    renderorder: str = "right-down"
+    width: int = 0
+    height: int = 0
+    tilewidth: int = 0
+    tileheight: int = 0
+    infinite: bool = False
     properties: Dict[str, Property] = field(default_factory=dict)
     tilesets: List[Tileset] = field(default_factory=list)
-    layers: List[Union[TileLayer, ObjectGroup, LayerGroup]] = field(default_factory=list)
-    
+    layers: List[AnyLayer] = field(default_factory=list)
+    extra_attrib: Dict[str, str] = field(default_factory=dict)      # nextobjectid, class...
+    extra_children: List[ET.Element] = field(default_factory=list)  # editorsettings...
+
+    _ATTRS = ("version", "tiledversion", "orientation", "renderorder", "width", "height",
+              "tilewidth", "tileheight", "infinite")
+
     @classmethod
-    def load(cls, filepath: Union[str, Path]) -> 'TiledMap':
-        """Load a TMX file from disk."""
+    def load(cls, filepath: Union[str, Path]) -> "TiledMap":
         filepath = Path(filepath)
-        
-        # Parse XML
-        tree = ET.parse(filepath)
-        root = tree.getroot()
-        
-        # PARSE MAP ATTRIBUTES
-        map_obj = cls(
-            version=root.get('version', '1.0'),
-            tiledversion=root.get('tiledversion', ''),
-            orientation=root.get('orientation', 'orthogonal'),
-            renderorder=root.get('renderorder', 'right-down'),
-            width=int(root.get('width', 0)),
-            height=int(root.get('height', 0)),
-            tilewidth=int(root.get('tilewidth', 0)),
-            tileheight=int(root.get('tileheight', 0)),
-            infinite=root.get('infinite', '0') == '1'
-        )
-        
-        # PARSE MAP PROPERTIES
-        props_elem = root.find('properties')
-        if props_elem is not None:
-            for prop_elem in props_elem.findall('property'):
-                prop = Property.from_xml(prop_elem)
-                map_obj.properties[prop.name] = prop
-        
-        # PARSE TILESETS
-        for tileset_elem in root.findall('tileset'):
-            firstgid = int(tileset_elem.get('firstgid'))
-            
-            # Check if external tileset (TSX file)
-            if tileset_elem.get('source'):
-                # EXTERNAL TILESET (TSX)
-                # The TMX only contains a reference; actual data is in TSX
-                tsx_path = filepath.parent / tileset_elem.get('source')
-                
-                try:
-                    # Parse the external TSX file
-                    tsx_tree = ET.parse(tsx_path)
-                    tsx_root = tsx_tree.getroot()
-                    
-                    # Load tileset from TSX, but use firstgid from TMX
-                    tileset = Tileset.from_xml(tsx_root, firstgid)
-                    tileset.source = tileset_elem.get('source')
-                    
-                except FileNotFoundError:
-                    # TSX file missing - create placeholder
-                    print(f"Warning: External tileset not found: {tsx_path}")
-                    tileset = Tileset(
-                        firstgid=firstgid,
-                        name=Path(tileset_elem.get('source')).stem,
-                        tilewidth=map_obj.tilewidth,
-                        tileheight=map_obj.tileheight,
-                        source=tileset_elem.get('source')
-                    )
-            else:
-                # EMBEDDED TILESET
-                tileset = Tileset.from_xml(tileset_elem, firstgid)
-            
-            map_obj.tilesets.append(tileset)
-        
-        # PARSE LAYERS
-        # Iterate through direct children of <map>
-        for elem in root:
-            if elem.tag == 'layer':
-                layer = TileLayer.from_xml(elem)
-                map_obj.layers.append(layer)
-            elif elem.tag == 'objectgroup':
-                group = ObjectGroup.from_xml(elem)
-                map_obj.layers.append(group)
-            elif elem.tag == 'group':
-                group = LayerGroup.from_xml(elem)
-                map_obj.layers.append(group)
-            # Note: tileset and properties are handled above
-        
-        return map_obj
-    
-    def save(self, filepath: Union[str, Path], encoding: str = 'csv', 
-             compression: Optional[str] = None):
-        """Save the map to a TMX file."""
-        filepath = Path(filepath)
-        
-        # Build XML tree
-        root = ET.Element('map')
-        root.set('version', self.version)
-        if self.tiledversion:
-            root.set('tiledversion', self.tiledversion)
-        root.set('orientation', self.orientation)
-        root.set('renderorder', self.renderorder)
-        root.set('width', str(self.width))
-        root.set('height', str(self.height))
-        root.set('tilewidth', str(self.tilewidth))
-        root.set('tileheight', str(self.tileheight))
-        
-        if self.infinite:
-            root.set('infinite', '1')
-        
-        # Properties
-        if self.properties:
-            props_elem = ET.SubElement(root, 'properties')
-            for prop in self.properties.values():
-                props_elem.append(prop.to_xml())
-        
-        # Tilesets
-        for tileset in self.tilesets:
-            root.append(tileset.to_xml())
-        
-        # Layers (set encoding/compression for tile layers)
-        for layer in self.layers:
-            if isinstance(layer, TileLayer):
-                layer.data.encoding = encoding
-                layer.data.compression = compression
-            root.append(layer.to_xml())
-        
-        # Format XML with indentation for readability
-        self._indent(root)
-        
-        # Write to file
-        tree = ET.ElementTree(root)
-        tree.write(filepath, encoding='utf-8', xml_declaration=True)
-    
+        root = ET.parse(filepath).getroot()
+        m = cls(version=root.get("version", "1.0"),
+                tiledversion=root.get("tiledversion", ""),
+                orientation=root.get("orientation", "orthogonal"),
+                renderorder=root.get("renderorder", "right-down"),
+                width=int(root.get("width", 0)), height=int(root.get("height", 0)),
+                tilewidth=int(root.get("tilewidth", 0)),
+                tileheight=int(root.get("tileheight", 0)),
+                infinite=root.get("infinite", "0") == "1",
+                properties=_read_properties(root))
+
+        for ts_elem in root.findall("tileset"):
+            m.tilesets.append(cls._load_tileset(ts_elem, filepath.parent, m))
+        m.layers = [l for l in map(_parse_layer, root) if l is not None]
+        _read_extras(m, root, cls._ATTRS,
+                     ("properties", "tileset") + LayerGroup._LAYER_TAGS)
+        return m
+
     @staticmethod
-    def _indent(elem, level=0):
-        """Add indentation to XML for readable output."""
-        indent = "\n" + "  " * level
-        
-        if len(elem):  # Has children
+    def _load_tileset(ts_elem: ET.Element, base: Path, m: "TiledMap") -> Tileset:
+        firstgid = int(ts_elem.get("firstgid"))
+        source = ts_elem.get("source")
+        if not source:
+            return Tileset.from_xml(ts_elem, firstgid)
+        tsx_path = base / source
+        try:
+            tileset = Tileset.from_xml(ET.parse(tsx_path).getroot(), firstgid)
+        except FileNotFoundError:
+            log.warning("Tileset externo no encontrado: %s", tsx_path)
+            tileset = Tileset(firstgid=firstgid, name=Path(source).stem,
+                              tilewidth=m.tilewidth, tileheight=m.tileheight)
+        tileset.source = source
+        return tileset
+
+    def save(self, filepath: Union[str, Path], encoding: Optional[str] = None,
+             compression: Optional[str] = None):
+        """Guarda el mapa. Sin ``encoding``, cada capa conserva su codificación y
+        compresión originales; con él, se aplica a todas las capas de tiles."""
+        root = ET.Element("map")
+        root.set("version", self.version)
+        _set_if(root, "tiledversion", self.tiledversion, "")
+        for name in ("orientation", "renderorder", "width", "height", "tilewidth", "tileheight"):
+            root.set(name, str(getattr(self, name)))
+        root.set("infinite", "1" if self.infinite else "0")
+        _write_extras(self, root, children_first=True)
+        _write_properties(root, self.properties)
+        root.extend([ts.to_xml() for ts in self.tilesets])
+
+        if encoding is not None:
+            for layer in self.iter_layers():
+                if isinstance(layer, TileLayer):
+                    layer.data.encoding, layer.data.compression = encoding, compression
+        root.extend([layer.to_xml() for layer in self.layers])
+
+        self._indent(root)
+        ET.ElementTree(root).write(Path(filepath), encoding="utf-8", xml_declaration=True)
+
+    @staticmethod
+    def _indent(elem: ET.Element, level: int = 0):
+        """Sangrado legible sin tocar el texto de los datos."""
+        indent = "\n" + " " * level
+        if len(elem):
             if not elem.text or not elem.text.strip():
-                elem.text = indent + "  "
-            if not elem.tail or not elem.tail.strip():
-                elem.tail = indent
-            
+                elem.text = indent + " "
             for child in elem:
                 TiledMap._indent(child, level + 1)
-            
-            # Last child's tail
-            if not child.tail or not child.tail.strip():
-                child.tail = indent
-        else:
-            if level and (not elem.tail or not elem.tail.strip()):
-                elem.tail = indent
-    
+                if not child.tail or not child.tail.strip():
+                    child.tail = indent + " "
+            elem[-1].tail = indent
+        elif level and (not elem.tail or not elem.tail.strip()):
+            elem.tail = indent
+
+    # --- Consultas ---
+
     def get_tileset_for_gid(self, gid: int) -> Optional[Tileset]:
-        """Find which tileset contains a given GID."""
-        # Iterate from last tileset (highest firstgid) to first
-        for i in range(len(self.tilesets) - 1, -1, -1):
-            if gid >= self.tilesets[i].firstgid:
-                return self.tilesets[i]
-        return None
-    
-    def get_layer_by_name(self, name: str) -> Optional[Union[TileLayer, ObjectGroup, LayerGroup]]:
-        """Find a layer by name (searches recursively through groups)."""
-        def search_layers(layers):
-            for layer in layers:
-                if layer.name == name:
-                    return layer
-                # Recursively search inside groups
-                if isinstance(layer, LayerGroup):
-                    result = search_layers(layer.layers)
-                    if result:
-                        return result
+        """Tileset al que pertenece un GID (los bits de flip se ignoran)."""
+        gid &= GID_MASK
+        if gid == 0:
             return None
-        
-        return search_layers(self.layers)
-    
-    def get_all_layers_flat(self) -> List[Union[TileLayer, ObjectGroup]]:
-        """Get all layers in a flat list (expanding groups recursively)."""
-        result = []
-        
-        def flatten(layers):
-            for layer in layers:
-                if isinstance(layer, LayerGroup):
-                    # Recurse into group, don't add group itself
-                    flatten(layer.layers)
-                else:
-                    result.append(layer)
-        
-        flatten(self.layers)
-        return result
+        for tileset in sorted(self.tilesets, key=lambda t: t.firstgid, reverse=True):
+            if gid >= tileset.firstgid:
+                return tileset
+        return None
+
+    def iter_layers(self, layers: Optional[List[AnyLayer]] = None):
+        """Todas las capas, entrando en los grupos (los grupos también se devuelven)."""
+        for layer in self.layers if layers is None else layers:
+            yield layer
+            if isinstance(layer, LayerGroup):
+                yield from self.iter_layers(layer.layers)
+
+    def get_layer_by_name(self, name: str) -> Optional[AnyLayer]:
+        return next((l for l in self.iter_layers() if l.name == name), None)
+
+    def get_all_layers_flat(self) -> List[Union[TileLayer, ObjectGroup, RawLayer]]:
+        """Todas las capas que no son grupos, en orden de dibujo."""
+        return [l for l in self.iter_layers() if not isinstance(l, LayerGroup)]
 
 
-# UTILITY FUNCTIONS
+# --- Utilidades ---
 
 def create_empty_map(width: int, height: int, tilewidth: int, tileheight: int,
                      orientation: str = "orthogonal") -> TiledMap:
-    """Create an empty map with specified dimensions."""
-    return TiledMap(
-        width=width,
-        height=height,
-        tilewidth=tilewidth,
-        tileheight=tileheight,
-        orientation=orientation
-    )
+    return TiledMap(width=width, height=height, tilewidth=tilewidth,
+                    tileheight=tileheight, orientation=orientation)
 
 
 def create_layer(name: str, width: int, height: int) -> TileLayer:
-    """Create an empty tile layer filled with GID 0 (empty tiles)."""
+    """Capa de tiles vacía (todo GID 0)."""
     layer = TileLayer(name=name, width=width, height=height)
-    # Initialize with empty tiles (GID 0)
-    layer.data.tiles = array.array('I', [0] * (width * height))
+    layer.data.tiles = array.array("I", [0] * (width * height))
     return layer
-
-
-# EXAMPLE USAGE (when run directly)
-
-if __name__ == "__main__":
-    print("=" * 60)
-    print("TMX Manager - Example Usage")
-    print("=" * 60)
-    
-    # Example 1: Create a new map
-    print("\n--- Creating New Map ---")
-    new_map = create_empty_map(20, 15, 32, 32)
-    
-    # Add a tileset
-    tileset = Tileset(
-        firstgid=1,
-        name="terrain",
-        tilewidth=32,
-        tileheight=32,
-        tilecount=64,
-        columns=8
-    )
-    tileset.image = Image(source="terrain.png", width=256, height=256)
-    new_map.tilesets.append(tileset)
-    
-    # Add a tile layer
-    ground = create_layer("Ground", 20, 15)
-    for y in range(15):
-        for x in range(20):
-            ground.set_tile_gid(x, y, 1)  # Fill with tile GID 1
-    new_map.layers.append(ground)
-    
-    # Add an object layer
-    objects = ObjectGroup(name="Collisions")
-    obj = MapObject(id=1, name="tree", type="collision", 
-                   x=100, y=100, width=32, height=64)
-    objects.objects.append(obj)
-    new_map.layers.append(objects)
-    
-    print(f"Created map: {new_map.width}x{new_map.height} tiles")
-    print(f"Tilesets: {len(new_map.tilesets)}")
-    print(f"Layers: {len(new_map.layers)}")
-    
-    # Save the map
-    new_map.save("example_output.tmx", encoding='csv')
-    print("Saved to: example_output.tmx")

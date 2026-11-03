@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<map version="1.10" tiledversion="1.11.0" class="Dungeon" orientation="orthogonal" renderorder="right-down" width="4" height="3" tilewidth="16" tileheight="16" infinite="0" backgroundcolor="#203040" nextlayerid="6" nextobjectid="5">
+ <editorsettings><export target="out.json" format="json"/></editorsettings>
+ <properties><property name="music" value="cave.ogg"/></properties>
+ <tileset firstgid="1" name="T" tilewidth="16" tileheight="16" tilecount="4" columns="2">
+  <image source="tiles.png" width="32" height="32"/>
+  <tile id="0" type="Wall"><properties><property name="solid" type="bool" value="true"/></properties>
+   <objectgroup draworder="index" id="2"><object id="1" x="0" y="8" width="16" height="8"/></objectgroup>
+  </tile>
+  <tile id="1"><animation><frame tileid="1" duration="100"/><frame tileid="2" duration="100"/></animation></tile>
+ </tileset>
+ <layer id="1" name="Suelo" width="4" height="3" class="ground">
+  <properties><property name="Z" type="int" value="0"/></properties>
+  <data encoding="csv">
+1,2,2147483651,4,
+0,1,1073741826,0,
+3,0,0,536870913
+</data>
+ </layer>
+ <imagelayer id="2" name="Fondo" offsetx="4" repeatx="1"><image source="tiles.png" width="32" height="32"/></imagelayer>
+ <objectgroup id="3" name="Objetos" color="#ff0000">
+  <object id="2" name="poly" x="10" y="10"><polygon points="0,0 10,0 10,10"/></object>
+  <object id="3" name="cartel" x="20" y="5" width="40" height="12"><text wrap="1">Hola</text></object>
+  <object id="4" name="punto" x="1" y="1"><point/></object>
+ </objectgroup>
+ <group id="4" name="G"><layer id="5" name="Arriba" width="4" height="3"><data>
+  <tile gid="1"/><tile/><tile/><tile/><tile/><tile/><tile/><tile/><tile/><tile/><tile/><tile gid="2"/>
+ </data></layer></group>
+</map>

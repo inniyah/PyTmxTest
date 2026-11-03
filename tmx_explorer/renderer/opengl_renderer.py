@@ -144,10 +144,14 @@ class OpenGLRenderer:
         self.world_projection = ortho_matrix(cx, cx + w / z, cy + h / z, cy, near, far)
 
     def resize(self, width: int, height: int):
+        """Tamaño lógico de la vista (en pantallas HiDPI, menor que el framebuffer)."""
         self.screen_width = width
         self.screen_height = height
-        glViewport(0, 0, width, height)
         self._update_projections()
+
+    def set_viewport(self, fb_width: int, fb_height: int):
+        """Píxeles reales del framebuffer. La proyección sigue en unidades lógicas."""
+        glViewport(0, 0, fb_width, fb_height)
 
     def set_camera(self, x: float, y: float, zoom: float):
         self.camera_x, self.camera_y, self.camera_zoom = x, y, zoom

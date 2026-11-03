@@ -11,8 +11,13 @@ WINDOW_HEIGHT = 720
 WINDOW_TITLE = "TMX Explorer"
 VSYNC = True
 
+# Tiempo
+MAX_FRAME_DT = 0.1             # s; un frame más largo (ventana arrastrada, pausa) se recorta
+MAX_STEP_TILES = 0.25          # el movimiento se divide en pasos de como mucho esto
+
 # Vista
-LEVEL_HEIGHT_OFFSET = 128      # píxeles que sube cada nivel Z en pantalla
+LEVEL_HEIGHT_OFFSET = 128      # px que sube cada nivel en pantalla (el mapa puede fijarlo
+                               # con la propiedad "level_height")
 LEVEL_HEIGHT_STEP = 16         # ajuste con Shift +/-
 INITIAL_FIT_FACTOR = 0.85      # margen al encuadrar el mapa al arrancar
 KEY_ZOOM_FACTOR = 1.2

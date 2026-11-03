@@ -1,9 +1,11 @@
-"""Estructura del mapa, colisión y carga de tilesets."""
+"""Mundo 3D, celdas de colisión y carga de tilesets."""
 
 from .collision import CollisionMap
-from .structure import Map3DStructure
+from .world import LayerRole, World
 
-__all__ = ["Map3DStructure", "CollisionMap", "TilesetRenderer"]
+Map3DStructure = World
+
+__all__ = ["World", "Map3DStructure", "LayerRole", "CollisionMap", "TilesetRenderer"]
 
 
 def __getattr__(name):

@@ -4,7 +4,7 @@ import logging
 import time
 from collections import deque
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Tuple
 
 import glfw
 import numpy as np
@@ -16,10 +16,10 @@ from . import config
 from .camera import Camera
 from .entities import Character, EntityManager
 from .gamepad import GamepadManager
-from .map.collision import FLAG_SOLID
-from .map.structure import Map3DStructure
+from .map.cells import is_solid
 from .map.tileset_renderer import TilesetRenderer
 from .map.visible_tiles import collect_visible_tiles
+from .map.world import World
 from .renderer.opengl_renderer import OpenGLRenderer
 
 log = logging.getLogger(__name__)
@@ -46,8 +46,10 @@ FPS_HISTORY = 60
 CONTROLS_HELP = (
     "WASD/Flechas: mover (cámara si no hay jugador) | Shift+WASD: cámara | Q/E: altura jugador\n"
     "Arrastrar: pan | Rueda o +/-: zoom | Shift +/-: separación de niveles | PgUp/PgDn: nivel visible\n"
-    "G: grid | I: info | P: profiling | C: debug colisión | Espacio: reset vista | ESC: salir"
+    "1-9: mostrar/ocultar capa | G: grid | I: info | P: profiling | C: debug colisión | "
+    "Espacio: reset vista | ESC: salir"
 )
+LAYER_TOGGLE_KEYS = [getattr(glfw, f"KEY_{i}") for i in range(1, 10)]
 
 
 class TMXExplorer:
@@ -59,6 +61,9 @@ class TMXExplorer:
         self.screen_height = config.WINDOW_HEIGHT
 
         self.window = self._create_window()
+        # HiDPI: tamaño lógico (coordenadas del ratón y de la vista) frente a píxeles reales
+        self.screen_width, self.screen_height = glfw.get_window_size(self.window)
+        fb_width, fb_height = glfw.get_framebuffer_size(self.window)
 
         # Entrada
         self.pressed_keys = set()
@@ -70,22 +75,23 @@ class TMXExplorer:
 
         # Mundo
         self.renderer = OpenGLRenderer(self.screen_width, self.screen_height)
+        self.renderer.set_viewport(fb_width, fb_height)
         log.info("Cargando TMX: %s", source_path)
         tmx_map = TiledMap.load(source_path)
         self.tileset_renderer = TilesetRenderer(tmx_map, source_path)
-        self.map_3d = Map3DStructure(tmx_map)
+        self.world = World(tmx_map)
         self.entity_manager = EntityManager(
-            tile_width=self.map_3d.tile_width,
-            tile_height=self.map_3d.tile_height,
-            collision_map=self.map_3d.collision,
-            max_z=self.map_3d.H,
+            tile_width=self.world.tile_width,
+            tile_height=self.world.tile_height,
+            collision_map=self.world.collision,
+            max_z=self.world.H,
         )
 
         # Vista
         self.camera = Camera(self.screen_width, self.screen_height)
         self._reset_camera()
-        self.current_z = self.map_3d.H - 1          # nivel más alto que se dibuja
-        self.level_height_offset = config.LEVEL_HEIGHT_OFFSET
+        self.current_z = self.world.H - 1           # nivel más alto que se dibuja
+        self.level_height_offset = self.world.level_height
         self._fit_camera_to_levels()
 
         # UI
@@ -93,7 +99,7 @@ class TMXExplorer:
         self.show_info = True
         self.show_profiling = False
         self.show_collision_debug = False
-        self.layer_visibility = [True] * self.map_3d.N
+        self.layer_visibility = np.ones(len(self.world.layers), dtype=bool)
 
         # Tiempo / profiling
         self.running = True
@@ -130,7 +136,8 @@ class TMXExplorer:
         glfw.set_mouse_button_callback(window, self._mouse_button_callback)
         glfw.set_cursor_pos_callback(window, self._cursor_pos_callback)
         glfw.set_scroll_callback(window, self._scroll_callback)
-        glfw.set_framebuffer_size_callback(window, self._resize_callback)
+        glfw.set_window_size_callback(window, self._window_size_callback)
+        glfw.set_framebuffer_size_callback(window, self._framebuffer_size_callback)
         return window
 
     # --- API pública ---
@@ -151,28 +158,28 @@ class TMXExplorer:
         """
         return z * self.level_height_offset
 
+    @property
+    def map_3d(self) -> World:
+        """Nombre antiguo de ``world``."""
+        return self.world
+
     # --- Cámara ---
 
     @property
     def map_pixel_size(self) -> Tuple[int, int]:
-        return (self.map_3d.map_width * self.map_3d.tile_width,
-                self.map_3d.map_height * self.map_3d.tile_height)
+        return self.world.pixel_size
 
     def _reset_camera(self):
-        self.camera.reset(self.map_3d.map_width, self.map_3d.map_height,
-                          self.map_3d.tile_width, self.map_3d.tile_height)
+        self.camera.reset(self.world.W, self.world.D, self.world.tile_width, self.world.tile_height)
 
     def _fit_camera_to_levels(self):
         """Encuadra el mapa completo incluyendo el desplazamiento de los niveles visibles."""
         map_w, map_h = self.map_pixel_size
         offset = self.level_screen_offset(self.current_z)
-        zoom = min(self.screen_width / map_w, self.screen_height / (map_h + offset), 1.0)
-        # Asignación directa: puede quedar por debajo de Camera.MIN_ZOOM en mapas grandes
-        self.camera.zoom = zoom * config.INITIAL_FIT_FACTOR
-        self.camera.center_on(map_w / 2, (map_h - offset) / 2)
+        self.camera.fit(0, -offset, map_w, map_h + offset, margin=config.INITIAL_FIT_FACTOR)
 
     def _change_view_level(self, delta: int):
-        new_z = max(0, min(self.map_3d.H - 1, self.current_z + delta))
+        new_z = max(0, min(self.world.H - 1, self.current_z + delta))
         if new_z != self.current_z:
             self.current_z = new_z
             self._fit_camera_to_levels()
@@ -218,6 +225,16 @@ class TMXExplorer:
                 self._change_level_spacing(-config.LEVEL_HEIGHT_STEP)
             else:
                 self.camera.zoom_by(1 / config.KEY_ZOOM_FACTOR)
+        elif key in LAYER_TOGGLE_KEYS:
+            self.toggle_layer(LAYER_TOGGLE_KEYS.index(key))
+
+    def toggle_layer(self, index: int):
+        """Muestra u oculta una capa de Tiled (por su orden de carga)."""
+        if 0 <= index < len(self.layer_visibility):
+            self.layer_visibility[index] = not self.layer_visibility[index]
+            layer = self.world.layers[index]
+            log.info("Capa %d '%s': %s", index + 1, layer.name,
+                     "visible" if self.layer_visibility[index] else "oculta")
 
     def _mouse_button_callback(self, window, button, action, mods):
         if button != glfw.MOUSE_BUTTON_LEFT:
@@ -238,12 +255,18 @@ class TMXExplorer:
     def _scroll_callback(self, window, xoffset, yoffset):
         self.camera.zoom_by(config.WHEEL_ZOOM_FACTOR if yoffset > 0 else 1 / config.WHEEL_ZOOM_FACTOR)
 
-    def _resize_callback(self, window, width, height):
+    def _window_size_callback(self, window, width, height):
+        """Tamaño lógico: el que usan la cámara, el ratón y los overlays."""
         if width == 0 or height == 0:      # ventana minimizada
             return
         self.screen_width, self.screen_height = width, height
         self.renderer.resize(width, height)
         self.camera.resize(width, height)
+
+    def _framebuffer_size_callback(self, window, width, height):
+        """Píxeles reales (en pantallas HiDPI, más que el tamaño lógico)."""
+        if width and height:
+            self.renderer.set_viewport(width, height)
 
     # --- Entrada por frame ---
 
@@ -297,18 +320,21 @@ class TMXExplorer:
 
     def _visible_tile_range(self, margin: int = 0) -> Tuple[int, int, int, int]:
         """(x0, x1, y0, y1) de tiles visibles, con ``margin`` tiles extra, recortado al mapa."""
-        tw, th = self.map_3d.tile_width, self.map_3d.tile_height
+        tw, th = self.world.tile_width, self.world.tile_height
         left, top, right, bottom = self.camera.get_visible_bounds()
         x0 = max(0, int((left - margin * tw) / tw))
-        x1 = min(self.map_3d.W, int((right + margin * tw) / tw) + 1)
+        x1 = min(self.world.W, int((right + margin * tw) / tw) + 1)
         y0 = max(0, int((top - margin * th) / th))
-        y1 = min(self.map_3d.D, int((bottom + margin * th) / th) + 1)
+        y1 = min(self.world.D, int((bottom + margin * th) / th) + 1)
         return x0, x1, y0, y1
 
     def collect_visible_tiles(self) -> Dict[int, "np.ndarray"]:
         """``{página del atlas: vértices}`` de los tiles visibles hasta current_z."""
+        # Los niveles altos se dibujan desplazados hacia arriba: ampliar la ventana por abajo
+        extra_rows = int(np.ceil(self.level_screen_offset(self.current_z) / self.world.tile_height))
         x0, x1, y0, y1 = self._visible_tile_range(config.TILE_CULL_MARGIN)
-        return collect_visible_tiles(self.map_3d, self.tileset_renderer.lookup,
+        y1 = min(self.world.D, y1 + extra_rows)
+        return collect_visible_tiles(self.world, self.tileset_renderer.lookup,
                                      x0, x1, y0, y1, self.current_z,
                                      self.level_height_offset, self.layer_visibility)
 
@@ -320,18 +346,19 @@ class TMXExplorer:
             self.renderer.draw_quads(pages[page], vertices)
 
     def _draw_characters(self):
-        batches = self.entity_manager.collect_render_data(self.level_height_offset)
+        batches = self.entity_manager.collect_render_data(self.level_height_offset,
+                                                          max_z=self.current_z)
         for texture, vertices in batches.items():
             self.renderer.draw_quads(texture, vertices)
 
     def draw_grid(self):
         if not self.show_grid:
             return
-        tw, th, zoom = self.map_3d.tile_width, self.map_3d.tile_height, self.camera.zoom
+        tw, th, zoom = self.world.tile_width, self.world.tile_height, self.camera.zoom
         left, top, right, bottom = self.camera.get_visible_bounds()
         x0, y0 = max(0, int(left / tw)), max(0, int(top / th))
-        x1 = min(self.map_3d.map_width, int(right / tw) + 2)
-        y1 = min(self.map_3d.map_height, int(bottom / th) + 2)
+        x1 = min(self.world.W, int(right / tw) + 2)
+        y1 = min(self.world.D, int(bottom / th) + 2)
 
         lines = []
         for x in range(x0, x1 + 1):
@@ -346,8 +373,8 @@ class TMXExplorer:
         """Celdas sólidas (rojo) y libres (verde) de cada nivel, desplazadas como los tiles."""
         if not self.show_collision_debug:
             return
-        collision = self.map_3d.collision
-        tw, th, zoom = self.map_3d.tile_width, self.map_3d.tile_height, self.camera.zoom
+        collision = self.world.collision
+        tw, th, zoom = self.world.tile_width, self.world.tile_height, self.camera.zoom
         x0, x1, y0, y1 = self._visible_tile_range(margin=1)
 
         player = self.entity_manager.player
@@ -360,12 +387,12 @@ class TMXExplorer:
         sx = (gx * tw - self.camera.x) * zoom
         cell = np.full(gx.shape, tw * zoom), np.full(gx.shape, th * zoom)
 
-        for z in range(self.map_3d.H):
+        for z in range(self.world.H):
             distance = min(abs(z - player_z), len(COLLISION_ALPHA_BY_DISTANCE) - 1)
             alpha = COLLISION_ALPHA_BY_DISTANCE[distance]
             sy = (gy * th - self.level_screen_offset(z) - self.camera.y) * zoom
             rects = np.stack([sx, sy, *cell], axis=-1)
-            solid = (collision.data[z, y0:y1, x0:x1] & FLAG_SOLID) != 0
+            solid = is_solid(collision.data[z, y0:y1, x0:x1])
 
             self.renderer.draw_rects(rects[~solid], (*COLLISION_EMPTY_COLOR, alpha))
             self.renderer.draw_rects(rects[solid], (*COLLISION_SOLID_COLOR, alpha))
@@ -373,7 +400,7 @@ class TMXExplorer:
     def draw_ui(self):
         if not self.show_info:
             return
-        m = self.map_3d
+        m = self.world
         lines = [
             f"FPS: {int(self.current_fps)} | Zoom: {self.camera.zoom:.2f}x",
             f"View Height: {self.current_z}/{m.H - 1} (level={m.get_level_value(self.current_z)})",
@@ -383,6 +410,9 @@ class TMXExplorer:
         player = self.entity_manager.player
         if player:
             lines.append(f"Player: ({player.x:.0f}, {player.y:.0f}) Z={player.z:.2f}")
+        hidden = [str(i + 1) for i, v in enumerate(self.layer_visibility) if not v]
+        if hidden:
+            lines.append(f"Capas ocultas: {', '.join(hidden)}")
         if self.show_profiling:
             for key in PROFILE_SECTIONS[:-1]:
                 samples = list(self.frame_times[key])[-60:]
@@ -421,7 +451,7 @@ class TMXExplorer:
         if dt > 0:
             self.fps_samples.append(1.0 / dt)
             self.current_fps = sum(self.fps_samples) / len(self.fps_samples)
-        return dt
+        return min(dt, config.MAX_FRAME_DT)     # una pausa larga no se simula de golpe
 
     def run(self):
         try:

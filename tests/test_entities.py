@@ -1,6 +1,7 @@
 from conftest import ROOT
-from tmx_explorer.entities import Character, Direction, EntityManager
+from tmx_explorer.entities import Direction, EntityManager
 from tmx_explorer.map.collision import FLAG_SOLID, CollisionMap
+from tmx_explorer.renderer.atlas import TextureAtlas, layout_atlas
 
 SPRITE = str(ROOT / "assets" / "people" / "guy.png")
 
@@ -47,3 +48,25 @@ def test_patrol_visits_points():
     for _ in range(200):
         npc.update(1 / 60)
     assert npc.patrol_index in (0, 1) and npc.x > 0
+
+
+def test_long_frame_does_not_tunnel_through_walls():
+    collision = CollisionMap(20, 1, 3)
+    collision.data[0, :, 10] = FLAG_SOLID                # pared de un tile en x = 10
+    em = EntityManager(tile_width=32, tile_height=32, collision_map=collision, max_z=1)
+    c = em.create_character(SPRITE, x=8.5 * 32, y=1.5 * 32, speed=150)
+    c.move(1, 0)
+    c.update(1.5)                                         # frame de 1.5 s
+    assert c.x < 10 * 32
+
+
+def test_characters_above_view_level_are_not_drawn():
+    em = EntityManager(max_z=3)
+    low = em.create_character(SPRITE, z=0)
+    em.create_character(SPRITE, z=2)
+    sprite = low.sprite
+    _, regions = layout_atlas({(d, i): f for d, fr in sprite.frames.items()
+                               for i, f in enumerate(fr)}, 1024)
+    sprite._gpu.atlas = TextureAtlas([object()], regions)     # atlas falso, sin GPU
+    count = lambda max_z: sum(len(v) for v in em.collect_render_data(0, max_z=max_z).values()) // 4
+    assert count(None) == 2 and count(2) == 2 and count(1) == 1

@@ -2,6 +2,25 @@
 
 A Python library for reading, modifying, and writing TMX files (Tiled Map Format).
 
+
+> **Novedades de la v2.3**
+>
+> - **Ida y vuelta sin pérdidas.** Cada clase guarda en `extra_attrib` y `extra_children`
+>   lo que no modela, y lo vuelve a escribir al guardar. Las capas de tipos no modelados
+>   (por ejemplo `imagelayer`) se cargan como `RawLayer`.
+> - **`save(path)` sin `encoding`** conserva la codificación y compresión de cada capa
+>   (antes forzaba CSV). Con `encoding` se aplica a todas.
+> - **Mapas infinitos.** `LayerData.chunks`, `TileLayer.is_infinite`, `bounds()` y
+>   `dense_tiles()`. `get_tile_gid` y `set_tile_gid` funcionan con chunks.
+> - **Propiedades.** Las `bool` se escriben como `true`/`false` (antes `True`/`False`, que
+>   Tiled no entendía). Se admiten propiedades de tipo `class`, texto multilínea y
+>   `propertytype`.
+> - **Clases.** `TileLayer.klass`, `LayerGroup.klass` y `ObjectGroup.klass` (atributo
+>   `class`); `Tile.type` y `MapObject.type` leen `class` o `type`. `MapObject.shape`
+>   indica la forma.
+> - **`get_tileset_for_gid`** ignora los bits de flip.
+> - Avisos con `logging` en vez de `print`; `iter_layers()` recorre todas las capas.
+
 ## Table of Contents
 
 1. [Overview](#overview)

@@ -80,15 +80,22 @@ class Character:
         if self.is_npc:
             self._update_npc_behavior(dt)
 
+        dt = min(dt, config.MAX_FRAME_DT)
         is_moving = self.velocity_x != 0 or self.velocity_y != 0
         if is_moving:
-            # Ejes por separado: así se puede "deslizar" a lo largo de una pared
-            new_x = self.x + self.velocity_x * dt
-            if self._can_move_to(new_x, self.y, self.z):
-                self.x = new_x
-            new_y = self.y + self.velocity_y * dt
-            if self._can_move_to(self.x, new_y, self.z):
-                self.y = new_y
+            # Pasos de como mucho MAX_STEP_TILES: un frame largo no atraviesa paredes
+            travel = max(abs(self.velocity_x) * dt / self.tile_width,
+                         abs(self.velocity_y) * dt / self.tile_height)
+            steps = max(1, math.ceil(travel / config.MAX_STEP_TILES))
+            step_dt = dt / steps
+            for _ in range(steps):
+                # Ejes por separado: así se puede "deslizar" a lo largo de una pared
+                new_x = self.x + self.velocity_x * step_dt
+                if self._can_move_to(new_x, self.y, self.z):
+                    self.x = new_x
+                new_y = self.y + self.velocity_y * step_dt
+                if self._can_move_to(self.x, new_y, self.z):
+                    self.y = new_y
             self._update_direction()
 
         if self.velocity_z != 0:

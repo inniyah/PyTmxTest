@@ -2,9 +2,12 @@
 
 A comprehensive technical document explaining the structure, data flow, and performance optimizations of the TMX-based 2D game engine.
 
-> **Nota (v2.2).** Este documento explica los conceptos de diseño; las rutas de código
+> **Nota (v2.3).** Este documento explica los conceptos de diseño; las rutas de código
 > reales están en el README. Desde la v2.2 los tiles y los personajes usan atlas de
-> texturas y la recolección de tiles está vectorizada (ver "Render Pipeline Flow").
+> texturas y la recolección de tiles está vectorizada. Desde la v2.3 el mapa es un mundo
+> integrado `World` (`map/world.py`) con `tiles[z, y, x, hueco]`, roles empaquetados en
+> 2 bits por hueco y celdas de 16 bits (`map/cells.py`); donde este documento habla de
+> `Map3DStructure.mapa[z, y, x, capa]`, léase el mundo integrado.
 
 ---
 

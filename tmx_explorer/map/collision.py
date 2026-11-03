@@ -5,23 +5,29 @@ Un humano mide ~0.5 x 0.5 tiles de base y ~0.85 niveles de alto.
 Ver docs/architecture.md para la explicación completa.
 """
 
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 
-# Flags por celda. Solo FLAG_SOLID se usa hoy; el resto de bits queda libre
-# (agua, escaleras, daño...).
-FLAG_SOLID = 1 << 0
+from .cells import BLOCK, GEOMETRY_MASK
+
+# Compatibilidad: el antiguo flag "sólido" es la forma BLOCK del formato de celdas
+FLAG_SOLID = BLOCK
 
 
 class CollisionMap:
-    """Rejilla 3D de flags de colisión, indexada como data[z, y, x]."""
+    """Consultas de colisión sobre una rejilla 3D de celdas (formato de ``cells.py``),
+    indexada como data[z, y, x]. Si se pasa ``data``, se usa ese array sin copiarlo."""
 
-    def __init__(self, width: int, height: int, depth: int):
+    def __init__(self, width: int, height: int, depth: int, data: Optional[np.ndarray] = None):
         self.W = width    # tiles en X
         self.H = height   # niveles en Z
         self.D = depth    # tiles en Y
-        self.data = np.zeros((self.H, self.D, self.W), dtype=np.uint16)
+        if data is None:
+            data = np.zeros((height, depth, width), dtype=np.uint16)
+        if data.shape != (height, depth, width):
+            raise ValueError(f"data tiene forma {data.shape}, se esperaba {(height, depth, width)}")
+        self.data = data
 
     # --- Acceso a celdas ---
 
@@ -39,7 +45,8 @@ class CollisionMap:
         return FLAG_SOLID
 
     def is_solid(self, x: int, y: int, z: int) -> bool:
-        return bool(self.get_flags(x, y, z) & FLAG_SOLID)
+        """Camino rápido: cualquier geometría cuenta como sólida (solo BLOCK implementada)."""
+        return (self.get_flags(x, y, z) & GEOMETRY_MASK) != 0
 
     def is_walkable(self, x: int, y: int, z: int) -> bool:
         return not self.is_solid(x, y, z)
@@ -91,7 +98,7 @@ class CollisionMap:
 
     def get_stats(self) -> dict:
         total = self.data.size
-        solid = int(np.count_nonzero(self.data & FLAG_SOLID))
+        solid = int(np.count_nonzero(self.data & GEOMETRY_MASK))
         return {
             "total_tiles": total,
             "solid_tiles": solid,

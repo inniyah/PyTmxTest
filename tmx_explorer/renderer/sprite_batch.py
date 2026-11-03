@@ -24,7 +24,7 @@ FLOATS_PER_VERTEX = 9
 VERTICES_PER_QUAD = 4
 INDICES_PER_QUAD = 6
 
-# Bits de flip tal como los guarda Map3DStructure.flips (GID >> 28)
+# Bits de flip de Tiled desplazados a 0..15 (GID >> 28)
 FLIP_H = GID_FLIP_H >> 28
 FLIP_V = GID_FLIP_V >> 28
 FLIP_D = GID_FLIP_D >> 28
@@ -44,6 +44,7 @@ def quad_vertices(x, y, w, h, depth, u0, v0, u1, v1,
     ``flips`` usa los bits de Tiled (H=8, V=4, D=2). Según la especificación, primero
     se aplica la diagonal y después los volteos horizontal y vertical. Con diagonal,
     el llamador debe pasar w y h ya intercambiados.
+    ``color`` es un RGBA para todos los quads o un array (N, 4), uno por quad.
     """
     x, y, w, h, depth, u0, v0, u1, v1 = np.broadcast_arrays(
         *(np.atleast_1d(np.asarray(a, dtype=np.float32))
@@ -66,7 +67,8 @@ def quad_vertices(x, y, w, h, depth, u0, v0, u1, v1,
 
     out[:, :, 2] = u0[:, None] + s * (u1 - u0)[:, None]
     out[:, :, 3] = v1[:, None] - t * (v1 - v0)[:, None]      # t = 0 (arriba) -> v1
-    out[:, :, 4:8] = np.asarray(color, dtype=np.float32)
+    color = np.asarray(color, dtype=np.float32)
+    out[:, :, 4:8] = color[:, None, :] if color.ndim == 2 else color   # (N, 4) o (4,)
     out[:, :, 8] = depth[:, None]
     return out.reshape(-1, FLOATS_PER_VERTEX)
 

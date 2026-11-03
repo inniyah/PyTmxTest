@@ -8,12 +8,15 @@ atlas; solo se reparte en varias páginas si no cabe en una textura.
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
 import numpy as np
 from PIL import Image
 
 from tmx_manager import TiledMap
+
+if TYPE_CHECKING:
+    from ..renderer.atlas import AtlasRegion
 
 log = logging.getLogger(__name__)
 

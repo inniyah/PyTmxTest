@@ -31,6 +31,7 @@ python run_explorer.py maps/map01/VTiles1.tmx              # atajo: jugador + NP
 | Arrastrar ratón, rueda, `+`/`-` | Pan y zoom |
 | Shift + `+`/`-` | Separación vertical entre niveles |
 | PgUp / PgDn | Nivel más alto que se dibuja |
+| 1 – 9 | Mostrar / ocultar la capa de Tiled número N |
 | G / I / P / C | Grid / info / profiling / debug de colisión |
 | Espacio | Reiniciar vista |
 | ESC | Salir |
@@ -40,10 +41,52 @@ Back para el grid.
 
 ## Preparar mapas en Tiled
 
-Cada capa de tiles se asigna a un nivel de altura con una propiedad custom `Z`
-(también vale `z` o `level`) de tipo int. Las capas sin esa propiedad van al nivel 0.
+El motor trabaja con un **mundo 3D de celdas**. Las capas de Tiled son solo la forma
+de editarlo: al cargar, todas las capas de una misma planta se integran en las celdas
+de esa planta. Cada celda tiene 4 huecos apilados de abajo arriba, en el orden de las
+capas en Tiled; los tiles vacíos no ocupan hueco.
 
-Para que un tile bloquee el paso, añádele una propiedad bool `solid = true` en el tileset.
+**Plantas.** Añade una propiedad `Z` de tipo int a la capa o, mejor, al grupo que
+contiene las capas de esa planta (las capas la heredan). Se admiten valores negativos
+(sótanos). Sin `Z`, la capa va a la planta 0.
+
+**Función de cada capa.** Ponla en la *clase* de la capa (campo Class de Tiled), o en
+una propiedad `role`. También se hereda del grupo.
+
+| Clase | Dibujo |
+|---|---|
+| `floor` | Plano, siempre por debajo de los personajes de su planta |
+| `object` | Ordenado por fila con los personajes (por defecto) |
+| `overhead` | Siempre por encima de los personajes (copas de árbol, arcos) |
+| `roof` | Como `overhead` (en el futuro se ocultará al entrar en un edificio) |
+
+Un tile puede imponer su función con su clase en el tileset: por ejemplo, una valla
+con clase `object` lo es aunque se pinte en una capa de suelo.
+
+**Colisión.** Propiedad bool `solid = true` en el tile, dentro del tileset.
+
+**Otros detalles:**
+
+- Las capas ocultas en Tiled no se cargan. La opacidad de capas y grupos se respeta.
+- La altura en píxeles de cada planta se puede fijar con una propiedad int
+  `level_height` en el mapa; si no, se usa 128.
+- Si una celda recibe más de 4 tiles, se conservan los de más abajo y se avisa con las
+  coordenadas.
+- Se admiten mapas infinitos.
+
+Ejemplo de organización:
+
+```
+ciudad.tmx                    (propiedad level_height = 92)
+├── grupo "Calle"             Z = 0
+│   ├── suelo                 class = floor
+│   ├── transiciones          class = floor      (tiles semitransparentes)
+│   ├── muros y vallas        class = object     (tiles con solid = true)
+│   └── copas                 class = overhead
+└── grupo "Casa, planta 1"    Z = 1
+    ├── suelo                 class = floor
+    └── muebles               class = object
+```
 
 ## Estructura
 
@@ -57,8 +100,9 @@ tmx_explorer/
   camera.py                 Cámara 2D con zoom
   gamepad.py                Mandos (layout estándar y joysticks genéricos)
   map/
-    structure.py            Map3DStructure: mapa[z, y, x, capa] + flips + colisión
-    collision.py            CollisionMap: flags por celda, colisión de cajas
+    world.py                World: tiles[z, y, x, hueco], roles, celdas (integra las capas)
+    cells.py                Formato de celda de 16 bits (forma de colisión + flags)
+    collision.py            CollisionMap: consultas de colisión sobre las celdas
     tileset_renderer.py     Tilesets -> atlas + tablas de consulta por GID
     visible_tiles.py        Recolección vectorizada (numpy) de los tiles visibles
   entities/
@@ -71,9 +115,8 @@ tmx_explorer/
     atlas.py                Empaquetado de imágenes en atlas con borde anti-bleeding
     texture.py              Texturas OpenGL
   shaders/sources.py        GLSL
-tests/                      Tests sin GPU (pytest)
+tests/                      Tests sin GPU (pytest); se ejecutan en GitHub Actions
 docs/                       architecture.md (diseño), tmx_manager.md (API del parser)
-legacy/                     Visores antiguos de una sola pieza (solo referencia)
 maps/  assets/              Mapas y sprites de ejemplo
 ```
 
@@ -98,8 +141,12 @@ from tmx_manager import TiledMap
 
 m = TiledMap.load("maps/map01/VTiles1.tmx")
 m.layers[0].set_tile_gid(3, 4, 12)
+m.save("copia.tmx")                                   # conserva la codificación de cada capa
 m.save("copia.tmx", encoding="base64", compression="zlib")
 ```
+
+Guardar no pierde nada: lo que `tmx_manager` no modela (capas de imagen, animaciones,
+formas de colisión de tiles, polígonos, textos, `nextobjectid`...) se conserva tal cual.
 
 ## Tests
 
@@ -115,6 +162,12 @@ atlas) y cada spritesheet de personaje con otra. El HUD (`I`) muestra las draw c
 
 ## Limitaciones conocidas
 
-- No se soportan mapas infinitos (chunks) ni orientaciones distintas de ortogonal.
-- El flag de rotación hexagonal de Tiled se ignora (solo aplica a mapas hexagonales).
-- Los tiles animados de Tiled se muestran con su primer frame.
+- De las formas de colisión de `cells.py` solo están implementadas vacío y bloque; el
+  resto tiene el formato reservado y, de momento, cuenta como bloque.
+- Los tejados (`roof`) aún no se ocultan al entrar en un edificio.
+- Los personajes se dibujan después de los tiles: el borde semitransparente de un
+  objeto que esté delante de un personaje se mezcla con lo que hay detrás del objeto,
+  no con el personaje.
+- No se soportan orientaciones distintas de ortogonal; el flag de rotación hexagonal
+  se ignora.
+- Los tiles animados de Tiled se conservan al guardar, pero se muestran estáticos.

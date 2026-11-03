@@ -14,8 +14,9 @@ class Camera:
         self.x = 0.0
         self.y = 0.0
         self.zoom = 1.0
-        self.width = width      # tamaño de la ventana en píxeles
+        self.width = width      # tamaño de la vista en píxeles lógicos
         self.height = height
+        self.min_zoom = self.MIN_ZOOM   # se rebaja si hace falta para ver el mapa entero
 
     def resize(self, width: int, height: int):
         self.width = width
@@ -29,7 +30,7 @@ class Camera:
     def set_zoom(self, zoom: float):
         """Cambia el zoom manteniendo fijo el centro de la pantalla."""
         center_x, center_y = self.center
-        self.zoom = max(self.MIN_ZOOM, min(self.MAX_ZOOM, zoom))
+        self.zoom = max(self.min_zoom, min(self.MAX_ZOOM, zoom))
         self.center_on(center_x, center_y)
 
     def zoom_by(self, factor: float):
@@ -44,11 +45,21 @@ class Camera:
         self.x = world_x - self.width / (2 * self.zoom)
         self.y = world_y - self.height / (2 * self.zoom)
 
+    def fit(self, left: float, top: float, width: float, height: float, margin: float = 1.0):
+        """Encuadra el rectángulo de mundo dado (sin pasar de 1:1).
+
+        Si para ello hace falta alejarse más que MIN_ZOOM, ese pasa a ser el mínimo:
+        así la rueda nunca salta y siempre se puede volver a ver todo.
+        """
+        zoom = min(self.width / width, self.height / height, 1.0) * margin
+        self.min_zoom = min(self.MIN_ZOOM, zoom)
+        self.zoom = zoom
+        self.center_on(left + width / 2, top + height / 2)
+
     def reset(self, map_width: int, map_height: int, tile_width: int, tile_height: int):
         """Vuelve al origen con un zoom que encaje el mapa (sin pasar de 1:1)."""
+        self.fit(0, 0, map_width * tile_width, map_height * tile_height)
         self.x = self.y = 0.0
-        self.zoom = min(self.width / (map_width * tile_width),
-                        self.height / (map_height * tile_height), 1.0)
 
     def screen_to_world(self, screen_x: float, screen_y: float) -> Tuple[float, float]:
         return self.x + screen_x / self.zoom, self.y + screen_y / self.zoom

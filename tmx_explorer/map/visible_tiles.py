@@ -1,78 +1,101 @@
-"""Recolección vectorizada de los tiles visibles, lista para dibujar.
+"""Recolección vectorizada de los tiles visibles del mundo, lista para dibujar.
 
-Sustituye al bucle Python tile a tile: para cada (nivel, capa) se toma la ventana
-visible del array del mapa con numpy y se generan todos sus quads de golpe.
-No necesita OpenGL.
+Para cada nivel se toma la ventana visible de ``world.tiles`` (todos sus huecos a
+la vez) y se generan los quads con numpy. No necesita OpenGL.
 """
 
-from typing import Dict, Sequence
+from typing import Dict, Optional
 
 import numpy as np
 
-from ..config import DEPTH_BASE, DEPTH_LAYER_STEP
+from ..config import DEPTH_BASE, DEPTH_LAYER_STEP, GID_MASK
 from ..renderer.sprite_batch import FLIP_D, quad_vertices
-from .structure import Map3DStructure
 from .tileset_renderer import TileLookup
+from .world import EMPTY_SOURCE, SLOTS, LayerRole, World
+
+# Profundidad relativa de cada rol respecto a la fila del tile (los personajes de la
+# misma fila están en +0.5): los suelos quedan debajo y lo superior, encima.
+ROLE_DEPTH = np.array([
+    -1.0,   # FLOOR
+    0.0,    # OBJECT
+    2.0,    # OVERHEAD
+    2.0,    # ROOF
+], dtype=np.float32)
+assert len(ROLE_DEPTH) == len(LayerRole)
+assert DEPTH_LAYER_STEP * (SLOTS - 1) < 0.5, "los huecos no deben alcanzar a los personajes"
 
 
-def collect_visible_tiles(map_3d: Map3DStructure, lookup: TileLookup,
+def collect_visible_tiles(world: World, lookup: TileLookup,
                           x0: int, x1: int, y0: int, y1: int,
-                          max_z: int, level_height_offset: float,
-                          layer_visibility: Sequence[bool]) -> Dict[int, np.ndarray]:
+                          max_z: int, level_height: float,
+                          layer_visible: Optional[np.ndarray] = None) -> Dict[int, np.ndarray]:
     """Vértices de los tiles en la ventana [y0:y1, x0:x1], niveles 0..max_z.
 
-    Devuelve ``{página del atlas: vértices (N*4, 9)}`` en coordenadas de mundo.
+    Devuelve ``{página del atlas: vértices (N*4, 9)}`` en coordenadas de mundo,
+    ordenados de atrás adelante (profundidad creciente) para que las transparencias
+    se mezclen bien.
 
-    Posición: los tiles más altos que la rejilla se anclan por abajo, y cada nivel
-    sube ``z * level_height_offset`` píxeles.
-    Profundidad: ``DEPTH_BASE + fila + z + capa * DEPTH_LAYER_STEP``.
-    Los quads salen en orden fila, columna, nivel, capa: con el depth test en GL_LESS,
-    a igual profundidad gana el primero dibujado.
+    ``layer_visible`` es un array bool indexado por ``LayerInfo.index`` (None = todas).
+    Profundidad: ``DEPTH_BASE + fila + z + ROLE_DEPTH[rol] + hueco * DEPTH_LAYER_STEP``.
     """
     if x0 >= x1 or y0 >= y1:
         return {}
 
-    tw, th = map_3d.tile_width, map_3d.tile_height
-    parts = {k: [] for k in ("y", "x", "z", "n", "gid", "flip")}
+    visible = np.zeros(256, dtype=bool)
+    visible[:len(world.layers)] = True if layer_visible is None else layer_visible[:len(world.layers)]
+    opacity = np.ones(256, dtype=np.float32)
+    opacity[:len(world.layers)] = [l.opacity for l in world.layers]
+    visible[EMPTY_SOURCE] = False
 
-    for z in range(min(max_z, map_3d.H - 1) + 1):
-        level = map_3d.get_level_value(z)
-        for n in range(map_3d.N):
-            if not layer_visibility[n] or map_3d.layer_levels[n] != level:
-                continue
-            window = map_3d.mapa[z, y0:y1, x0:x1, n]
-            ys, xs = np.nonzero(window)
-            if ys.size == 0:
-                continue
-            parts["y"].append(ys + y0)
-            parts["x"].append(xs + x0)
-            parts["z"].append(np.full(ys.size, z, dtype=np.int32))
-            parts["n"].append(np.full(ys.size, n, dtype=np.int32))
-            parts["gid"].append(window[ys, xs])
-            parts["flip"].append(map_3d.flips[z, y0:y1, x0:x1, n][ys, xs])
-
-    if not parts["y"]:
+    parts = []
+    for z in range(min(max_z, world.H - 1) + 1):
+        used = int(world.slots_used[z])                 # solo los huecos que usa el nivel
+        if used == 0:
+            continue
+        win = world.tiles[z, y0:y1, x0:x1, :used]       # (h, w, used)
+        src = world.source[z, y0:y1, x0:x1, :used]
+        ys, xs, ks = np.nonzero(((win & GID_MASK) != 0) & visible[src])
+        if ys.size == 0:
+            continue
+        roles = (world.roles[z, y0:y1, x0:x1][ys, xs] >> (2 * ks).astype(np.uint8)) & 3
+        parts.append((ys + y0, xs + x0, np.full(ys.size, z), ks, win[ys, xs, ks],
+                      roles, src[ys, xs, ks]))
+    if not parts:
         return {}
-    ty, tx, tz, tn, gid, flip = (np.concatenate(parts[k])
-                                 for k in ("y", "x", "z", "n", "gid", "flip"))
+    ty, tx, tz, tk, gid, role, src = (np.concatenate(c) for c in zip(*parts))
 
-    page, uv, size = lookup.get(gid)
-    keep = page >= 0
-    order = np.lexsort((tn, tz, tx, ty))           # fila, columna, nivel, capa
-    order = order[keep[order]]
-    ty, tx, tz, tn, flip, page, uv, size = (a[order] for a in (ty, tx, tz, tn, flip, page, uv, size))
+    page, uv, size = lookup.get(gid & GID_MASK)
+    depth = DEPTH_BASE + ty + tz + ROLE_DEPTH[role] + tk * DEPTH_LAYER_STEP
 
-    w, h = size[:, 0].copy(), size[:, 1].copy()
+    # Una sola ordenación: atrás -> adelante y, a igual profundidad, fila, columna,
+    # nivel, hueco (con el depth test en GL_LESS gana el primero dibujado).
+    # Los tiles sin imagen en el atlas se descartan en el mismo paso.
+    order = np.lexsort((tk, tz, tx, ty, depth))
+    order = order[page[order] >= 0]
+    if order.size == 0:
+        return {}
+    ty, tz, tx, gid, src, page, uv, size, depth = (
+        a[order] for a in (ty, tz, tx, gid, src, page, uv, size, depth))
+
+    flip = (gid >> 28).astype(np.uint8)
+    w, h = size[:, 0], size[:, 1]
     diagonal = (flip & FLIP_D) != 0
-    w[diagonal], h[diagonal] = size[diagonal, 1], size[diagonal, 0]   # giro de 90º
+    if diagonal.any():                                   # giro de 90º: se intercambian
+        w, h = np.where(diagonal, h, w), np.where(diagonal, w, h)
 
-    world_x = tx * tw
-    world_y = (ty + 1) * th - h - tz * level_height_offset
-    depth = DEPTH_BASE + ty + tz + tn * DEPTH_LAYER_STEP
+    world_x = tx * world.tile_width
+    world_y = (ty + 1) * world.tile_height - h - tz * level_height
+    alpha = opacity[src]
+    if (alpha == 1.0).all():
+        color = (1.0, 1.0, 1.0, 1.0)                     # caso común: sin array por quad
+    else:
+        color = np.ones((len(ty), 4), dtype=np.float32)
+        color[:, 3] = alpha
 
     vertices = quad_vertices(world_x, world_y, w, h, depth,
-                             uv[:, 0], uv[:, 1], uv[:, 2], uv[:, 3], flips=flip)
+                             uv[:, 0], uv[:, 1], uv[:, 2], uv[:, 3], flips=flip, color=color)
+    pages = np.unique(page)
+    if pages.size == 1:                                  # caso común: atlas de una página
+        return {int(pages[0]): vertices}
     vertices = vertices.reshape(-1, 4, vertices.shape[-1])
-
-    return {int(p): vertices[page == p].reshape(-1, vertices.shape[-1])
-            for p in np.unique(page)}
+    return {int(p): vertices[page == p].reshape(-1, vertices.shape[-1]) for p in pages}
