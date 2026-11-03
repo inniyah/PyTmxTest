@@ -1,8 +1,13 @@
-"""Renderer OpenGL 3.3 core: tiles/sprites por lotes, líneas, rectángulos y HUD de texto."""
+"""Renderer OpenGL 3.3 core.
+
+Dos espacios de coordenadas:
+    mundo     tiles y personajes; la cámara (posición + zoom) va en la matriz de proyección
+    pantalla  overlays y HUD, en píxeles con origen arriba a la izquierda
+"""
 
 import ctypes
 import logging
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 from OpenGL.GL import (
@@ -22,7 +27,7 @@ from .. import config
 from ..shaders.sources import (
     FRAGMENT_SHADER, SIMPLE_FRAGMENT_SHADER, SIMPLE_VERTEX_SHADER, VERTEX_SHADER,
 )
-from .sprite_batch import SpriteBatch
+from .sprite_batch import SpriteBatch, quad_vertices
 from .texture import Texture
 
 log = logging.getLogger(__name__)
@@ -35,6 +40,7 @@ HUD_LINE_HEIGHT = 18
 HUD_WIDTH = 350
 HUD_PADDING = 5
 HUD_BACKGROUND = (0, 0, 0, 180)
+HUD_DEPTH = 9999.0
 
 
 def ortho_matrix(left, right, bottom, top, near, far) -> np.ndarray:
@@ -65,21 +71,13 @@ def _load_hud_font():
 
 
 class OpenGLRenderer:
-    """Dibuja en coordenadas de mundo (tiles, sprites) o de pantalla (overlays, HUD).
-
-    La cámara se aplica en CPU dentro de ``draw_batched_tiles``; el resto de métodos
-    recibe coordenadas de pantalla en píxeles.
-    """
-
     def __init__(self, screen_width: int, screen_height: int):
         self.screen_width = screen_width
         self.screen_height = screen_height
-
         self.camera_x = 0.0
         self.camera_y = 0.0
         self.camera_zoom = 1.0
-
-        self.texture_cache: Dict[int, Texture] = {}   # GID -> textura del tile
+        self.draw_calls = 0          # draw calls del frame anterior (para el HUD)
 
         self._init_shaders()
         self._init_buffers()
@@ -112,7 +110,7 @@ class OpenGLRenderer:
         self.simple_vbo = glGenBuffers(1)
         self._simple_vbo_size = 0
         glBindVertexArray(self.simple_vao)
-        self._ensure_simple_vbo(10 * 1024 * 1024)
+        self._ensure_simple_vbo(1024 * 1024)
         stride = SIMPLE_FLOATS_PER_VERTEX * FLOAT_SIZE
         glEnableVertexAttribArray(0)
         glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(0))
@@ -121,7 +119,7 @@ class OpenGLRenderer:
         glBindVertexArray(0)
 
     def _init_state(self):
-        self.update_projection()
+        self._update_projections()
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
         glEnable(GL_DEPTH_TEST)
@@ -129,63 +127,49 @@ class OpenGLRenderer:
         glDisable(GL_CULL_FACE)
 
     def _ensure_simple_vbo(self, nbytes: int):
-        """Asegura que el VBO de primitivas simples tiene al menos nbytes."""
         if nbytes <= self._simple_vbo_size:
             return
+        size = max(nbytes, 2 * self._simple_vbo_size)
         glBindBuffer(GL_ARRAY_BUFFER, self.simple_vbo)
-        glBufferData(GL_ARRAY_BUFFER, nbytes, None, GL_DYNAMIC_DRAW)
-        self._simple_vbo_size = nbytes
+        glBufferData(GL_ARRAY_BUFFER, size, None, GL_DYNAMIC_DRAW)
+        self._simple_vbo_size = size
 
-    # --- Estado por frame ---
+    # --- Proyecciones y estado por frame ---
 
-    def update_projection(self):
-        """Proyección ortográfica en píxeles de pantalla, origen arriba a la izquierda."""
-        self.projection = ortho_matrix(0, self.screen_width, self.screen_height, 0,
-                                       config.DEPTH_NEAR, config.DEPTH_FAR)
+    def _update_projections(self):
+        near, far = config.DEPTH_NEAR, config.DEPTH_FAR
+        w, h = self.screen_width, self.screen_height
+        self.screen_projection = ortho_matrix(0, w, h, 0, near, far)
+        z, cx, cy = self.camera_zoom, self.camera_x, self.camera_y
+        self.world_projection = ortho_matrix(cx, cx + w / z, cy + h / z, cy, near, far)
 
     def resize(self, width: int, height: int):
         self.screen_width = width
         self.screen_height = height
         glViewport(0, 0, width, height)
-        self.update_projection()
+        self._update_projections()
 
     def set_camera(self, x: float, y: float, zoom: float):
-        self.camera_x = x
-        self.camera_y = y
-        self.camera_zoom = zoom
+        self.camera_x, self.camera_y, self.camera_zoom = x, y, zoom
+        self._update_projections()
 
     def begin_frame(self):
+        self.draw_calls = self.batch.draw_calls
+        self.batch.draw_calls = 0
         glClearColor(0.0, 0.0, 0.0, 1.0)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
-    def preload_texture(self, gid: int, image: Image.Image) -> Texture:
-        if gid not in self.texture_cache:
-            self.texture_cache[gid] = Texture.from_pil(image)
-        return self.texture_cache[gid]
+    # --- Quads con textura ---
 
-    # --- Sprites ---
-
-    def _use_sprite_shader(self):
+    def draw_quads(self, texture: Texture, vertices: np.ndarray, world: bool = True):
+        """Dibuja quads generados con ``quad_vertices``, en coordenadas de mundo o de pantalla."""
+        if len(vertices) == 0:
+            return
         glUseProgram(self.shader_program)
-        glUniformMatrix4fv(self.proj_loc, 1, GL_FALSE, self.projection.T)
+        projection = self.world_projection if world else self.screen_projection
+        glUniformMatrix4fv(self.proj_loc, 1, GL_FALSE, projection.T)
         glUniform1i(self.tex_loc, 0)
-
-    def draw_batched_tiles(self, tile_batches: Dict[Texture, List[Tuple]]):
-        """Dibuja ``{textura: [(x, y, w, h, depth), ...]}`` en coordenadas de mundo."""
-        self._use_sprite_shader()
-        cx, cy, zoom = self.camera_x, self.camera_y, self.camera_zoom
-
-        for texture, tiles in tile_batches.items():
-            if not tiles:
-                continue
-            self.batch.begin(texture)
-            for x, y, w, h, depth in tiles:
-                if self.batch.is_full:
-                    self.batch.flush()
-                    self.batch.begin(texture)
-                self.batch.add_sprite((x - cx) * zoom, (y - cy) * zoom,
-                                      w * zoom, h * zoom, depth)
-            self.batch.flush()
+        self.batch.draw(texture, vertices)
         glUseProgram(0)
 
     # --- Primitivas simples (coordenadas de pantalla) ---
@@ -193,13 +177,14 @@ class OpenGLRenderer:
     def _draw_simple(self, vertices: np.ndarray, mode, vertex_count: int, depth_test: bool):
         self._ensure_simple_vbo(vertices.nbytes)
         glUseProgram(self.simple_shader)
-        glUniformMatrix4fv(self.simple_proj_loc, 1, GL_FALSE, self.projection.T)
+        glUniformMatrix4fv(self.simple_proj_loc, 1, GL_FALSE, self.screen_projection.T)
         glBindBuffer(GL_ARRAY_BUFFER, self.simple_vbo)
         glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.nbytes, vertices)
         glBindVertexArray(self.simple_vao)
         if not depth_test:
             glDisable(GL_DEPTH_TEST)
         glDrawArrays(mode, 0, vertex_count)
+        self.batch.draw_calls += 1
         if not depth_test:
             glEnable(GL_DEPTH_TEST)
         glBindVertexArray(0)
@@ -207,18 +192,21 @@ class OpenGLRenderer:
 
     def draw_lines(self, lines: List[Tuple[float, float, float, float]], color: Color):
         """Líneas ``(x1, y1, x2, y2)`` en píxeles de pantalla."""
-        if not lines:
+        if not len(lines):
             return
-        points = np.asarray(lines, dtype=np.float32).reshape(-1, 2)      # 2 puntos por línea
+        points = np.asarray(lines, dtype=np.float32).reshape(-1, 2)
         colors = np.broadcast_to(np.float32(_rgba(color)), (len(points), 4))
         vertices = np.ascontiguousarray(np.hstack([points, colors]), dtype=np.float32)
         self._draw_simple(vertices, GL_LINES, len(points), depth_test=True)
 
-    def draw_rects(self, rects: List[Tuple[float, float, float, float]], color: Color):
-        """Rectángulos rellenos ``(x, y, w, h)`` en píxeles de pantalla, sin depth test."""
-        if not rects:
+    def draw_rects(self, rects, color: Color):
+        """Rectángulos rellenos ``(x, y, w, h)`` en píxeles de pantalla, sin depth test.
+
+        Acepta una lista de tuplas o un array numpy (N, 4).
+        """
+        r = np.asarray(rects, dtype=np.float32).reshape(-1, 4)
+        if not len(r):
             return
-        r = np.asarray(rects, dtype=np.float32)
         x0, y0 = r[:, 0], r[:, 1]
         x1, y1 = x0 + r[:, 2], y0 + r[:, 3]
         # Dos triángulos por rectángulo: (0,0)(1,0)(1,1) y (0,0)(1,1)(0,1)
@@ -231,8 +219,8 @@ class OpenGLRenderer:
     # --- HUD ---
 
     def draw_text_lines(self, text_lines: List[str], x: int, y: int):
-        """Panel de texto. Se regenera si cambia el contenido (salvo la línea de FPS)
-        o cada ``HUD_REFRESH_FRAMES`` frames."""
+        """Panel de texto. Se regenera si cambia el contenido (salvo las líneas que
+        empiezan por "FPS:") o cada ``HUD_REFRESH_FRAMES`` frames."""
         cache_key = "|".join(l for l in text_lines if not l.startswith("FPS:"))
         self._hud_frame_counter += 1
         if (self._hud_texture is None or cache_key != self._hud_cache_key
@@ -242,13 +230,10 @@ class OpenGLRenderer:
             self._hud_frame_counter = 0
 
         tex = self._hud_texture
-        self._use_sprite_shader()
+        vertices = quad_vertices(x, y, tex.width, tex.height, HUD_DEPTH, *tex.uv_rect())
         glDisable(GL_DEPTH_TEST)
-        self.batch.begin(tex)
-        self.batch.add_sprite(x, y, tex.width, tex.height, depth=9999)
-        self.batch.flush()
+        self.draw_quads(tex, vertices, world=False)
         glEnable(GL_DEPTH_TEST)
-        glUseProgram(0)
 
     def _rebuild_hud(self, text_lines: List[str]):
         height = len(text_lines) * HUD_LINE_HEIGHT + 2 * HUD_PADDING

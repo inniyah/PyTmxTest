@@ -59,15 +59,17 @@ tmx_explorer/
   map/
     structure.py            Map3DStructure: mapa[z, y, x, capa] + flips + colisión
     collision.py            CollisionMap: flags por celda, colisión de cajas
-    tileset_renderer.py     Carga de tilesets -> texturas
+    tileset_renderer.py     Tilesets -> atlas + tablas de consulta por GID
+    visible_tiles.py        Recolección vectorizada (numpy) de los tiles visibles
   entities/
-    sprite.py               Spritesheets 4x4 animados (frames y texturas compartidos)
+    sprite.py               Spritesheets 4x4 animados (frames y atlas compartidos)
     character.py            Movimiento con colisión, IA de NPC
     manager.py              Creación y actualización de personajes
   renderer/
-    opengl_renderer.py      Tiles/sprites, líneas, rectángulos y HUD
-    sprite_batch.py         Batching de quads
-    texture.py              Texturas con borde extruido anti-bleeding
+    opengl_renderer.py      Quads en mundo (cámara en la proyección) y pantalla; HUD
+    sprite_batch.py         quad_vertices (vectorizado, con flips) + dibujo por lotes
+    atlas.py                Empaquetado de imágenes en atlas con borde anti-bleeding
+    texture.py              Texturas OpenGL
   shaders/sources.py        GLSL
 tests/                      Tests sin GPU (pytest)
 docs/                       architecture.md (diseño), tmx_manager.md (API del parser)
@@ -105,9 +107,14 @@ m.save("copia.tmx", encoding="base64", compression="zlib")
 python -m pytest
 ```
 
+## Rendimiento
+
+Todos los tiles van en un atlas compartido y la recolección de tiles visibles es
+vectorizada, así que el mapa se dibuja con una sola draw call (una por página del
+atlas) y cada spritesheet de personaje con otra. El HUD (`I`) muestra las draw calls.
+
 ## Limitaciones conocidas
 
-- Cada tile es una textura propia: hay una draw call por tile distinto visible.
-  La mejora pendiente es un atlas por tileset.
-- Los flags de volteo/rotación de Tiled se leen (`Map3DStructure.flips`) pero aún no se dibujan.
 - No se soportan mapas infinitos (chunks) ni orientaciones distintas de ortogonal.
+- El flag de rotación hexagonal de Tiled se ignora (solo aplica a mapas hexagonales).
+- Los tiles animados de Tiled se muestran con su primer frame.

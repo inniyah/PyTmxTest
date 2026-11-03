@@ -1,6 +1,9 @@
 """Crea, actualiza y prepara para dibujar todos los personajes de la escena."""
 
+from collections import defaultdict
 from typing import Dict, List, Optional, Sequence, Tuple
+
+import numpy as np
 
 from .character import Character, NPCBehavior
 from .sprite import AnimatedSprite
@@ -117,18 +120,22 @@ class EntityManager:
         for character in self.characters:
             character.update(dt)
 
-    def collect_render_data(self, renderer=None, level_height_offset: int = 0) -> List[Tuple]:
-        """``[(textura, x, y, w, h, depth), ...]`` en coordenadas de mundo.
+    def collect_render_data(self, level_height_offset: float = 0) -> Dict[object, np.ndarray]:
+        """``{textura: vértices}`` de todos los personajes, en coordenadas de mundo.
 
-        No hace falta ordenar: el depth buffer resuelve qué queda delante.
-        ``renderer`` se acepta por compatibilidad y no se usa.
+        Los personajes que comparten spritesheet comparten textura, así que salen en
+        el mismo lote. No hace falta ordenar: el depth buffer decide qué queda delante.
         """
-        data = []
+        from ..renderer.sprite_batch import quad_vertices
+
+        groups = defaultdict(list)
         for c in self.characters:
+            texture, region = c.get_region()
             rx, ry = c.get_render_position()
-            ry -= c.z * level_height_offset
-            data.append((c.get_texture(), rx, ry, c.width, c.height, c.get_depth()))
-        return data
+            groups[texture].append((rx, ry - c.z * level_height_offset,
+                                    region.width, region.height, c.get_depth(), *region.uv))
+        return {texture: quad_vertices(*np.asarray(rows, dtype=np.float32).T)
+                for texture, rows in groups.items()}
 
     # --- Consultas ---
 

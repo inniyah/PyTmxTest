@@ -2,11 +2,9 @@
 
 A comprehensive technical document explaining the structure, data flow, and performance optimizations of the TMX-based 2D game engine.
 
-> **Nota sobre el estado actual (v2.1).** Este documento explica los conceptos de diseño.
-> Algunas optimizaciones descritas todavía no son ciertas del todo:
-> cada tile es hoy su propia textura, así que el batching agrupa por GID y hay una
-> draw call por cada tile distinto visible (la solución pendiente es un atlas por tileset).
-> Las rutas de código reales están en el README.
+> **Nota (v2.2).** Este documento explica los conceptos de diseño; las rutas de código
+> reales están en el README. Desde la v2.2 los tiles y los personajes usan atlas de
+> texturas y la recolección de tiles está vectorizada (ver "Render Pipeline Flow").
 
 ---
 
@@ -435,34 +433,49 @@ Savings: ~22% less data per sprite
 ┌─────────────────────────────────────────────────────────────┐
 │                    FRAME RENDERING                          │
 ├─────────────────────────────────────────────────────────────┤
-│                                                             │
 │  1. BEGIN FRAME                                             │
 │     └─► glClear(COLOR | DEPTH)                              │
+│     └─► set_camera(): la cámara va en la matriz de          │
+│         proyección; los vértices quedan en coordenadas      │
+│         de mundo y la GPU hace la transformación            │
 │                                                             │
-│  2. TILE BATCHING                                           │
-│     ┌─────────────────────────────────────────────────┐     │
-│     │  For each visible tile:                         │     │
-│     │    texture = tileset.get_texture(gid)           │     │
-│     │    tile_batches[texture].append(tile_data)      │     │
-│     └─────────────────────────────────────────────────┘     │
+│  2. TILE COLLECTION  (map/visible_tiles.py, numpy)          │
+│     Para cada (nivel z, capa n) visible:                    │
+│       ventana = mapa[z, y0:y1, x0:x1, n]                    │
+│       gids    = ventana no nula                             │
+│       página, uv, tamaño = TileLookup[gids]   (por GID)     │
+│     quad_vertices(...) genera TODOS los quads de una vez,   │
+│     aplicando flips de Tiled a las UV                       │
+│     → {página del atlas: vértices}                          │
 │                                                             │
-│  3. BATCH RENDERING                                         │
-│     ┌─────────────────────────────────────────────────┐     │
-│     │  For each (texture, tiles) in batches:          │     │
-│     │    batch.begin(texture)   # Bind texture        │     │
-│     │    For each tile:                               │     │
-│     │      batch.add_sprite(x, y, w, h, depth)        │     │
-│     │    batch.flush()          # Draw all at once    │     │
-│     └─────────────────────────────────────────────────┘     │
+│  3. TILE RENDERING                                          │
+│     Una draw call por página del atlas (normalmente 1)      │
 │                                                             │
 │  4. ENTITY RENDERING                                        │
-│     └─► Similar batching for character sprites              │
+│     Una draw call por spritesheet (atlas de 16 frames)      │
 │                                                             │
-│  5. UI RENDERING                                            │
-│     └─► Text overlay (depth test disabled)                  │
-│                                                             │
+│  5. OVERLAYS + UI  (coordenadas de pantalla)                │
+│     Grid, debug de colisión (vectorizado), HUD              │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### Texture Atlas
+
+Todos los tiles de todos los tilesets se empaquetan en un atlas (`renderer/atlas.py`)
+con un algoritmo de estanterías. Cada tile se extruye 1 px repitiendo su borde, así
+que el filtrado nunca toma píxeles del vecino. Si no cabe en una textura
+(`ATLAS_MAX_SIZE`, limitado al máximo de la GPU) se reparte en varias páginas.
+
+`TileLookup` guarda tres arrays indexados por GID (página, UV, tamaño), lo que permite
+resolver miles de tiles con una sola operación de indexado de numpy.
+
+### Tile Flips
+
+Tiled guarda en los 4 bits altos del GID: H (0x8), V (0x4), D (diagonal, 0x2) y
+rotación hexagonal (0x1). `Map3DStructure` los separa en `flips`. Según la
+especificación de Tiled se aplica primero la diagonal y luego H y V; en
+`quad_vertices` se deshacen en orden inverso para saber qué punto de la imagen
+original corresponde a cada esquina. Con diagonal, el quad intercambia ancho y alto.
 
 ### Depth Buffer Usage
 
@@ -724,7 +737,7 @@ def get_visible_bounds(self):
 
 | Optimization | Technique | Impact |
 |--------------|-----------|--------|
-| Draw Call Reduction | Sprite Batching | 1 draw call por textura (hoy, por tile distinto; pendiente: atlas) |
+| Draw Call Reduction | Atlas + batching | ~1 draw call para el mapa + 1 por spritesheet |
 | Memory Efficiency | Sprite Sharing | Frames y texturas GPU compartidos por spritesheet |
 | Render Culling | Visible Bounds | Only render visible tiles |
 | Collision Speed | NumPy Arrays | O(1) tile lookup |
@@ -738,17 +751,17 @@ def get_visible_bounds(self):
 #### 1. Sprite Batching
 
 ```
-Before: 10,000 tiles × 1 draw call = 10,000 draw calls
-After:  10,000 tiles ÷ ~1000 per batch × 10 textures = ~100 draw calls
-
-Improvement: 100× reduction
+Sin batching:          10,000 tiles × 1 draw call  = 10,000 draw calls
+Textura por tile:      1 draw call por tile distinto ≈ 100-300 draw calls
+Atlas (actual):        1 draw call por página del atlas ≈ 1 draw call
 ```
 
 #### 2. Texture Caching
 
 ```python
-# TilesetRenderer caches all tile textures
-tile_texture_cache: Dict[int, Texture]  # GID → Texture
+# TilesetRenderer: un atlas para todos los tiles + tablas por GID
+atlas: TextureAtlas          # páginas (Texture) + regiones
+lookup: TileLookup           # page[gid], uv[gid], size[gid]
 
 # EntityManager caches sprite templates
 _sprite_cache: Dict[str, AnimatedSprite]  # path → template
@@ -767,11 +780,12 @@ indices = pre_generate_indices(max_sprites)  # Never changes
 #### 4. Lazy Initialization
 
 ```python
-# Character textures created on first render
-def get_texture(self, renderer):
-    if not self._textures_initialized:
-        self._init_textures(renderer)  # Deferred
-    return self._texture_cache[key]
+# El atlas de un spritesheet se sube a la GPU la primera vez que se dibuja
+@property
+def atlas(self):
+    if self._gpu.atlas is None:          # _gpu es compartido entre instancias
+        self._gpu.atlas = TextureAtlas.build(frames)
+    return self._gpu.atlas
 ```
 
 #### 5. Squared Distance Comparison
@@ -898,7 +912,8 @@ CLEANUP:
 
 | Array | dtype | Why |
 |-------|-------|-----|
-| mapa (tiles) | uint16 | GIDs 0-65535, 2 bytes each |
+| mapa (tiles) | uint32 | GIDs sin bits de flip, 4 bytes each |
+| flips | uint8 | bits de flip de Tiled (GID >> 28) |
 | collision | uint16 | 16 flag bits, 2 bytes each |
 | vertices | float32 | GPU requires 32-bit floats |
 | indices | uint32 | >65535 vertices possible |
@@ -907,9 +922,9 @@ CLEANUP:
 
 | Cache | Key | Value | Purpose |
 |-------|-----|-------|---------|
-| tile_texture_cache | GID (int) | Texture | Tile rendering |
-| _sprite_cache | "path_w_h" | AnimatedSprite | Sprite sharing |
-| _texture_cache | (Direction, frame) | Texture | Character frames |
+| TileLookup.page/uv/size | GID (índice de array) | página, UV, tamaño | Tile rendering |
+| TextureAtlas.regions | GID o (Direction, frame) | AtlasRegion | Tiles y frames de personaje |
+| _sprite_cache | (path, w, h) | AnimatedSprite | Sprite sharing |
 | frames | Direction | List[Image] | Animation frames |
 
 ---

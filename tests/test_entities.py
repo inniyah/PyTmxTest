@@ -5,13 +5,13 @@ from tmx_explorer.map.collision import FLAG_SOLID, CollisionMap
 SPRITE = str(ROOT / "assets" / "people" / "guy.png")
 
 
-def test_sprites_share_frames_and_texture_cache():
+def test_sprites_share_frames_and_gpu_atlas():
     em = EntityManager()
     a = em.create_character(SPRITE)
     b = em.create_npc(SPRITE)
     assert a.sprite is not b.sprite                 # estado de animación propio
     assert a.sprite.frames is b.sprite.frames       # imágenes compartidas
-    assert a.sprite.textures is b.sprite.textures   # texturas GPU compartidas
+    assert a.sprite._gpu is b.sprite._gpu           # un solo atlas en GPU
 
 
 def test_walk_cycle_skips_idle_frame():

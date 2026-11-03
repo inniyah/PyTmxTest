@@ -5,11 +5,17 @@ from OpenGL.GL import (
     GL_CLAMP_TO_EDGE, GL_NEAREST, GL_RGBA, GL_TEXTURE0, GL_TEXTURE_2D,
     GL_TEXTURE_MAG_FILTER, GL_TEXTURE_MIN_FILTER, GL_TEXTURE_WRAP_S,
     GL_TEXTURE_WRAP_T, GL_UNSIGNED_BYTE, glActiveTexture, glBindTexture,
-    glDeleteTextures, glGenTextures, glTexImage2D, glTexParameteri,
+    GL_MAX_TEXTURE_SIZE, glDeleteTextures, glGenTextures, glGetIntegerv, glTexImage2D,
+    glTexParameteri,
 )
 from PIL import Image
 
 from ..config import TEXTURE_BORDER
+
+
+def max_texture_size() -> int:
+    """Lado máximo de textura que admite la GPU (requiere contexto GL activo)."""
+    return int(glGetIntegerv(GL_MAX_TEXTURE_SIZE))
 
 
 class Texture:
@@ -35,14 +41,19 @@ class Texture:
         glBindTexture(GL_TEXTURE_2D, 0)
 
     @classmethod
+    def from_array(cls, pixels: np.ndarray, border: int = 0) -> "Texture":
+        """Desde un array RGBA (alto, ancho, 4) con la fila 0 arriba, como en PIL."""
+        pixels = np.ascontiguousarray(pixels[::-1], dtype=np.uint8)   # OpenGL empieza por abajo
+        h, w = pixels.shape[:2]
+        return cls(w, h, pixels.tobytes(), border)
+
+    @classmethod
     def from_pil(cls, image: Image.Image, add_border: bool = True) -> "Texture":
         pixels = np.asarray(image.convert("RGBA"))
         border = TEXTURE_BORDER if add_border else 0
         if border:
             pixels = np.pad(pixels, ((border, border), (border, border), (0, 0)), mode="edge")
-        pixels = np.ascontiguousarray(pixels[::-1])   # OpenGL empieza por abajo
-        h, w = pixels.shape[:2]
-        return cls(w, h, pixels.tobytes(), border)
+        return cls.from_array(pixels, border)
 
     @classmethod
     def from_file(cls, filepath: str, add_border: bool = True) -> "Texture":

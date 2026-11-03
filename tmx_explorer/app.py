@@ -2,11 +2,12 @@
 
 import logging
 import time
-from collections import defaultdict, deque
+from collections import deque
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import glfw
+import numpy as np
 from OpenGL.GL import GL_TRUE
 
 from tmx_manager import TiledMap
@@ -15,8 +16,10 @@ from . import config
 from .camera import Camera
 from .entities import Character, EntityManager
 from .gamepad import GamepadManager
+from .map.collision import FLAG_SOLID
 from .map.structure import Map3DStructure
 from .map.tileset_renderer import TilesetRenderer
+from .map.visible_tiles import collect_visible_tiles
 from .renderer.opengl_renderer import OpenGLRenderer
 
 log = logging.getLogger(__name__)
@@ -69,7 +72,7 @@ class TMXExplorer:
         self.renderer = OpenGLRenderer(self.screen_width, self.screen_height)
         log.info("Cargando TMX: %s", source_path)
         tmx_map = TiledMap.load(source_path)
-        self.tileset_renderer = TilesetRenderer(tmx_map, source_path, self.renderer)
+        self.tileset_renderer = TilesetRenderer(tmx_map, source_path)
         self.map_3d = Map3DStructure(tmx_map)
         self.entity_manager = EntityManager(
             tile_width=self.map_3d.tile_width,
@@ -77,7 +80,6 @@ class TMXExplorer:
             collision_map=self.map_3d.collision,
             max_z=self.map_3d.H,
         )
-        log.info("Texturas en caché: %d", len(self.renderer.texture_cache))
 
         # Vista
         self.camera = Camera(self.screen_width, self.screen_height)
@@ -303,50 +305,24 @@ class TMXExplorer:
         y1 = min(self.map_3d.D, int((bottom + margin * th) / th) + 1)
         return x0, x1, y0, y1
 
-    def collect_visible_tiles_ordered(self) -> Dict:
-        """``{textura: [(x, y, w, h, depth), ...]}`` de los tiles visibles hasta current_z."""
-        batches = defaultdict(list)
-        m = self.map_3d
+    def collect_visible_tiles(self) -> Dict[int, "np.ndarray"]:
+        """``{página del atlas: vértices}`` de los tiles visibles hasta current_z."""
         x0, x1, y0, y1 = self._visible_tile_range(config.TILE_CULL_MARGIN)
-        if x0 >= x1 or y0 >= y1:
-            return batches
-
-        # Capas visibles de cada nivel, precalculadas fuera del bucle de tiles
-        layers_by_z = [
-            [n for n in range(m.N)
-             if self.layer_visibility[n] and m.layer_levels[n] == m.get_level_value(z)]
-            for z in range(self.current_z + 1)
-        ]
-
-        tw, th = m.tile_width, m.tile_height
-        for y in range(y0, y1):
-            for x in range(x0, x1):
-                for z, layers in enumerate(layers_by_z):
-                    level_offset = self.level_screen_offset(z)
-                    for n in layers:
-                        gid = int(m.mapa[z, y, x, n])
-                        if gid == 0:
-                            continue
-                        texture = self.tileset_renderer.get_tile_texture(gid)
-                        size = self.tileset_renderer.get_tile_size(gid)
-                        if not texture or not size:
-                            continue
-                        w, h = size
-                        # Tiles más altos que la rejilla se anclan por abajo
-                        world_y = (y + 1) * th - h - level_offset
-                        depth = config.DEPTH_BASE + y + z + n * config.DEPTH_LAYER_STEP
-                        batches[texture].append((x * tw, world_y, w, h, depth))
-        return batches
+        return collect_visible_tiles(self.map_3d, self.tileset_renderer.lookup,
+                                     x0, x1, y0, y1, self.current_z,
+                                     self.level_height_offset, self.layer_visibility)
 
     # --- Dibujo ---
 
+    def _draw_tiles(self, tile_batches: Dict[int, "np.ndarray"]):
+        pages = self.tileset_renderer.textures
+        for page, vertices in tile_batches.items():
+            self.renderer.draw_quads(pages[page], vertices)
+
     def _draw_characters(self):
-        batches = defaultdict(list)
-        for texture, x, y, w, h, depth in self.entity_manager.collect_render_data(
-                level_height_offset=self.level_height_offset):
-            batches[texture].append((x, y, w, h, depth))
-        if batches:
-            self.renderer.draw_batched_tiles(batches)
+        batches = self.entity_manager.collect_render_data(self.level_height_offset)
+        for texture, vertices in batches.items():
+            self.renderer.draw_quads(texture, vertices)
 
     def draw_grid(self):
         if not self.show_grid:
@@ -376,22 +352,23 @@ class TMXExplorer:
 
         player = self.entity_manager.player
         player_z = int(player.z) if player else 0
-        cell_w, cell_h = tw * zoom, th * zoom
+        if x0 >= x1 or y0 >= y1:
+            return
+
+        # Rejilla de esquinas en pantalla, común a todos los niveles salvo el desplazamiento
+        gx, gy = np.meshgrid(np.arange(x0, x1), np.arange(y0, y1))
+        sx = (gx * tw - self.camera.x) * zoom
+        cell = np.full(gx.shape, tw * zoom), np.full(gx.shape, th * zoom)
 
         for z in range(self.map_3d.H):
             distance = min(abs(z - player_z), len(COLLISION_ALPHA_BY_DISTANCE) - 1)
             alpha = COLLISION_ALPHA_BY_DISTANCE[distance]
-            level_offset = self.level_screen_offset(z)
+            sy = (gy * th - self.level_screen_offset(z) - self.camera.y) * zoom
+            rects = np.stack([sx, sy, *cell], axis=-1)
+            solid = (collision.data[z, y0:y1, x0:x1] & FLAG_SOLID) != 0
 
-            solid, empty = [], []
-            for y in range(y0, y1):
-                sy = (y * th - level_offset - self.camera.y) * zoom
-                for x in range(x0, x1):
-                    rect = ((x * tw - self.camera.x) * zoom, sy, cell_w, cell_h)
-                    (solid if collision.is_solid(x, y, z) else empty).append(rect)
-
-            self.renderer.draw_rects(empty, (*COLLISION_EMPTY_COLOR, alpha))
-            self.renderer.draw_rects(solid, (*COLLISION_SOLID_COLOR, alpha))
+            self.renderer.draw_rects(rects[~solid], (*COLLISION_EMPTY_COLOR, alpha))
+            self.renderer.draw_rects(rects[solid], (*COLLISION_SOLID_COLOR, alpha))
 
     def draw_ui(self):
         if not self.show_info:
@@ -400,7 +377,8 @@ class TMXExplorer:
         lines = [
             f"FPS: {int(self.current_fps)} | Zoom: {self.camera.zoom:.2f}x",
             f"View Height: {self.current_z}/{m.H - 1} (level={m.get_level_value(self.current_z)})",
-            f"Textures: {len(self.renderer.texture_cache)}",
+            f"Draw calls: {self.renderer.draw_calls} | Atlas: "
+            f"{len(self.tileset_renderer.textures)} página(s)",
         ]
         player = self.entity_manager.player
         if player:
@@ -418,9 +396,9 @@ class TMXExplorer:
         self.renderer.set_camera(self.camera.x, self.camera.y, self.camera.zoom)
 
         t1 = time.perf_counter()
-        tile_batches = self.collect_visible_tiles_ordered()
+        tile_batches = self.collect_visible_tiles()
         t2 = time.perf_counter()
-        self.renderer.draw_batched_tiles(tile_batches)
+        self._draw_tiles(tile_batches)
         self._draw_characters()
         t3 = time.perf_counter()
         self.draw_collision_debug()

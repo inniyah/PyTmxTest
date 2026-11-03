@@ -29,6 +29,7 @@ DEPTH_NEAR, DEPTH_FAR = -10000.0, 10000.0
 
 # Render
 MAX_SPRITES_PER_BATCH = 20000
+ATLAS_MAX_SIZE = 4096          # lado máximo de cada página del atlas (se limita al de la GPU)
 TEXTURE_BORDER = 1             # px extruidos alrededor de cada tile (anti-bleeding)
 HUD_REFRESH_FRAMES = 6         # el HUD se regenera cada N frames
 HUD_FONT_SIZE = 14

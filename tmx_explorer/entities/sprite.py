@@ -3,9 +3,9 @@
 Filas = dirección (abajo, izquierda, derecha, arriba); columnas = frames.
 La columna 0 es el frame en reposo; al caminar se cicla 1 -> 2 -> 3.
 
-Las instancias creadas con ``from_cached`` comparten los frames PIL *y* las
-texturas de GPU con la original; cada una solo tiene su propio estado de
-animación (dirección, frame, temporizador).
+Las instancias creadas con ``from_cached`` comparten los frames PIL *y* el atlas
+de GPU (una textura con los 16 frames) con la original; cada una solo tiene su
+propio estado de animación (dirección, frame, temporizador).
 """
 
 import logging
@@ -18,6 +18,7 @@ from PIL import Image
 from ..config import ANIMATION_FPS, SPRITE_COLS, SPRITE_ROWS
 
 if TYPE_CHECKING:
+    from ..renderer.atlas import AtlasRegion
     from ..renderer.texture import Texture
 
 log = logging.getLogger(__name__)
@@ -33,6 +34,14 @@ class Direction(IntEnum):
 class AnimationState(IntEnum):
     IDLE = 0
     WALKING = 1
+
+
+class _SharedGPUData:
+    """Contenedor mutable compartido entre instancias: el atlas se crea una sola vez."""
+    __slots__ = ("atlas",)
+
+    def __init__(self):
+        self.atlas = None
 
 
 IDLE_FRAME = 0
@@ -53,7 +62,7 @@ class AnimatedSprite:
 
         # Datos compartidos entre instancias (ver from_cached)
         self.frames: Dict[Direction, List[Image.Image]] = self._cut_frames()
-        self.textures: Dict[Tuple[Direction, int], "Texture"] = {}
+        self._gpu = _SharedGPUData()
 
         self._reset_animation(animation_speed)
         log.info("Spritesheet %s: %dx%d por frame", Path(spritesheet_path).name,
@@ -68,7 +77,7 @@ class AnimatedSprite:
         instance.frame_width = cached.frame_width
         instance.frame_height = cached.frame_height
         instance.frames = cached.frames
-        instance.textures = cached.textures      # mismo dict: una sola copia en GPU
+        instance._gpu = cached._gpu              # mismo atlas: una sola copia en GPU
         instance._reset_animation(animation_speed)
         return instance
 
@@ -122,14 +131,21 @@ class AnimatedSprite:
     def get_frame(self, direction: Direction, frame_index: int) -> Image.Image:
         return self.frames[direction][frame_index]
 
-    def get_texture(self) -> "Texture":
-        """Textura GPU del frame actual. Se crean la primera vez y se comparten."""
-        if not self.textures:
-            from ..renderer.texture import Texture
-            for direction, frames in self.frames.items():
-                for index, frame in enumerate(frames):
-                    self.textures[direction, index] = Texture.from_pil(frame)
-        return self.textures[self.direction, self.current_frame]
+    @property
+    def atlas(self):
+        """Atlas con los 16 frames (se sube a la GPU la primera vez que se pide)."""
+        if self._gpu.atlas is None:
+            from ..renderer.atlas import TextureAtlas
+            self._gpu.atlas = TextureAtlas.build(
+                {(direction, index): frame
+                 for direction, frames in self.frames.items()
+                 for index, frame in enumerate(frames)})
+        return self._gpu.atlas
+
+    def get_region(self) -> Tuple["Texture", "AtlasRegion"]:
+        """(textura de la página, región) del frame actual."""
+        region = self.atlas[self.direction, self.current_frame]
+        return self.atlas.texture_for(region), region
 
     @property
     def width(self) -> int:

@@ -14,7 +14,6 @@ from .sprite import AnimatedSprite, Direction
 
 if TYPE_CHECKING:
     from ..map.collision import CollisionMap
-    from ..renderer.texture import Texture
 
 # Parámetros de comportamiento
 WANDER_PAUSE_CHANCE = 0.3
@@ -218,9 +217,9 @@ class Character:
         return (config.DEPTH_BASE + self.y / self.tile_height + self.z
                 + config.DEPTH_CHARACTER_BIAS)
 
-    def get_texture(self, renderer=None) -> "Texture":
-        """Textura del frame actual (``renderer`` se acepta por compatibilidad)."""
-        return self.sprite.get_texture()
+    def get_region(self):
+        """(textura, AtlasRegion) del frame actual."""
+        return self.sprite.get_region()
 
     @property
     def width(self) -> int:
