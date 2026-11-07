@@ -1,0 +1,10 @@
+# Pieza floor_ne_flat_000: metros, X este, Y arriba, Z sur
+mtllib pieces.mtl
+o floor_ne_flat_000
+v 0 0 0
+v 2 0 2
+v 2 0 0
+vn 0.000000 1.000000 0.000000
+g floor
+usemtl floor
+f 1//1 2//1 3//1

@@ -1,0 +1,25 @@
+# Materiales de las piezas de prueba: un color plano por tipo de parte
+newmtl floor
+Kd 0.620 0.740 0.550
+Ka 1 1 1
+illum 1
+
+newmtl ramp
+Kd 0.860 0.660 0.380
+Ka 1 1 1
+illum 1
+
+newmtl wall
+Kd 0.550 0.660 0.840
+Ka 1 1 1
+illum 1
+
+newmtl fill
+Kd 0.620 0.620 0.660
+Ka 1 1 1
+illum 1
+
+newmtl ceiling
+Kd 0.700 0.560 0.800
+Ka 1 1 1
+illum 1

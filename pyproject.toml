@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tmx-explorer"
-version = "2.3.0"
+version = "2.7.3"
 description = "Visor OpenGL de mapas Tiled (TMX) con niveles de altura y personajes"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -27,13 +27,15 @@ tmx-explorer = "tmx_explorer.__main__:main"
 [tool.setuptools]
 py-modules = ["tmx_manager"]
 packages = ["tmx_explorer", "tmx_explorer.entities", "tmx_explorer.map",
-            "tmx_explorer.renderer", "tmx_explorer.shaders"]
+            "tmx_explorer.renderer", "tmx_explorer.shaders",
+            "engine", "engine.world", "engine.compiler", "engine.render", "engine.physics"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 110
+extend-exclude = ["tools/pieces/objparser.py"]   # código aportado, se mantiene tal cual
 target-version = "py39"
 
 [tool.ruff.lint]

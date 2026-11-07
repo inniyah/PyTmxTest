@@ -115,6 +115,14 @@ tmx_explorer/
     atlas.py                Empaquetado de imágenes en atlas con borde anti-bleeding
     texture.py              Texturas OpenGL
   shaders/sources.py        GLSL
+engine/                     Motor nuevo
+  world/                    Celda de 32 bits, CellSpec, chunks, WorldStore (SQLite), WorldView
+  compiler/                 Tiled (.tmx) -> mundo compilado (.cworld)
+  render/                   Dibujo del mundo y de los personajes (OpenGL 3.3, profundidad por píxel)
+  physics/                  Física de andar para cilindros, vectorizada
+  viewer.py                 Visor: python -m engine.viewer MUNDO.cworld
+  png16.py                  PNG de 16 bits por canal (mapas de posición)
+tools/pieces/               Catálogo de piezas, .obj, render oblicuo, tileset y galería
 tests/                      Tests sin GPU (pytest); se ejecutan en GitHub Actions
 docs/                       architecture.md (diseño), tmx_manager.md (API del parser)
 maps/  assets/              Mapas y sprites de ejemplo
@@ -147,6 +155,94 @@ m.save("copia.tmx", encoding="base64", compression="zlib")
 
 Guardar no pierde nada: lo que `tmx_manager` no modela (capas de imagen, animaciones,
 formas de colisión de tiles, polígonos, textos, `nextobjectid`...) se conserva tal cual.
+
+## Motor nuevo: compilar mapas
+
+El paquete `engine` es el motor nuevo. Los mapas de Tiled se compilan una vez a un mundo
+de celdas de 32 bits (un archivo SQLite con chunks, paletas y el atlas), que el motor carga
+sin saber nada de Tiled:
+
+```bash
+python -m engine.compiler maps/gallery/gallery.tmx          # -> maps/gallery/gallery.cworld
+python -m engine.world info  maps/gallery/gallery.cworld    # parámetros e informe de compilación
+python -m engine.world stats maps/gallery/gallery.cworld    # chunks, celdas, paletas
+python -m engine.world cell  maps/gallery/gallery.cworld 1 22 0   # qué hay en una celda
+```
+
+El compilador avisa con coordenadas de los conflictos (dos suelos en la misma mitad, mezclar
+las diagonales `/` y `\`…) y de las rampas que sobresalen hacia una celda ocupada; con
+errores no escribe nada salvo con `--force`. En código:
+
+```python
+from engine.world.store import SQLiteWorldStore
+from engine.world.view import WorldView
+
+world = WorldView(SQLiteWorldStore("maps/gallery/gallery.cworld"))
+world.cells(xs, ys, zs)      # valores de 32 bits de muchas celdas a la vez (arrays de numpy)
+world.visual(xs, ys, zs)     # sus 4 huecos visuales
+```
+
+### Ver un mundo compilado y andar por él
+
+```bash
+python -m engine.compiler maps/course/course.tmx
+python -m engine.viewer maps/course/course.cworld          # con personaje
+python -m engine.viewer maps/course/course.cworld --no-player --no-vsync
+```
+
+| Control | Acción |
+|---|---|
+| WASD / flechas | Andar (sin personaje: mover la vista) |
+| Espacio | Saltar |
+| Arrastrar con el ratón | Mover la vista (deja de seguir al personaje; F vuelve a seguirlo) |
+| Rueda, `+` / `-` | Zoom |
+| PgUp / PgDn | Planta más alta que se dibuja |
+| T | Tinte por altura (más claro cuanto más alto) |
+| P | Profundidad por píxel en escala de grises |
+| Inicio | Centrar el mapa |
+| ESC | Salir |
+
+**Dibujo.** Profundidad por píxel: la cercanía de cada píxel a la cámara se calcula con su
+altura (del mapa de posición del atlas, o de su posición dentro del sprite en los personajes)
+y su posición en pantalla, así que la oclusión es exacta sin reglas de orden. En superficies
+coincidentes gana la planta superior (0.1 px de cercanía por planta). La geometría de cada
+chunk se construye una vez al cargarlo.
+
+**Física de andar** (`engine/physics/walker.py`). Cilindros verticales con velocidad hacia una
+objetivo (agarre en el suelo y en el aire), gravedad y salto; paredes como segmentos (bordes,
+diagonales finas, lados de lo macizo) con deslizamiento en cualquier ángulo; escalón máximo,
+techos bajos y rampas. Para apoyarse cuenta el centro del cilindro; para chocar con suelos y
+techos, también su contorno. Paso fijo de 60 Hz, con las consultas al mundo agrupadas para
+todos los cilindros a la vez (≈ 0.45 ms por paso con uno, ≈ 2.3 ms con cien). Un test de estrés
+(200 personajes andando y saltando al azar) comprueba que nadie se mete en el suelo.
+
+Opciones útiles: `--spawn X Y` (celda de aparición), `--tint`, `--screenshot captura.png`
+(dibujar, guardar y salir) y, con ella, `--walk DX DZ SEGUNDOS` para andar antes de capturar.
+
+## Piezas de prueba (formato de celda de 32 bits)
+
+`tools/pieces` genera, a partir de un catálogo de 106 piezas, todo lo necesario para
+probar el formato de celda nuevo (paredes, rellenos, suelos, rampas y techos bajos):
+
+```bash
+python -m tools.pieces          # ~2 s
+```
+
+| Salida | Contenido |
+|---|---|
+| `assets/pieces/obj/*.obj`, `pieces.mtl` | Una malla mínima por pieza (metros; X este, Y arriba, Z sur) |
+| `assets/pieces/pieces.png` | Atlas de color, renderizado desde los `.obj` en la proyección oblicua |
+| `assets/pieces/pieces.n.png` | Normales por píxel, misma disposición |
+| `assets/pieces/pieces.p.png` | Posición 3D por píxel (RGBA de 16 bits), misma disposición |
+| `assets/pieces/pieces.tsx` | Tileset de Tiled: cada tile lleva su clase y su parte de celda como propiedades |
+| `maps/gallery/gallery.tmx` | Galería con cada pieza en su celda y su nombre debajo |
+| `maps/course/course.tmx` | Recorrido en tres plantas: plataforma con escalera, habitación, muro diagonal, túnel, terraza con rampa ancha y torre |
+
+Proyección (como los mapas existentes): celdas de 2 × 2 × 3 m, tiles de 128 px de ancho,
+filas de 92 px y 133 px por planta. Las propiedades de cada tile (`walls`, `fill`, `floor`,
+`floor_part`, `ceiling`, `ceiling_part`, `flags`) se leen con
+`engine.world.CellSpec.from_properties`, y el formato de 32 bits está en
+`engine/world/cell.py`.
 
 ## Tests
 

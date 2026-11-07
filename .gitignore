@@ -18,3 +18,6 @@ Thumbs.db
 
 # Tiled: archivos de sesión
 *.tiled-session
+
+# Mundos compilados (se regeneran con python -m engine.compiler)
+*.cworld
