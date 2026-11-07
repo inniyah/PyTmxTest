@@ -33,6 +33,12 @@ class CourseBuilder:
         self.pieces = {p.name: p for p in pieces}
         self.gid = {p.name: i + 1 for i, p in enumerate(pieces)}
         self.cells: Dict[Tuple[int, str], Dict[Tuple[int, int], int]] = {}
+        self.lights: Dict[int, list] = {}
+
+    def light(self, level: int, x: float, y: float, color: str = "#ffd9a0", radius: float = 6.0,
+              intensity: float = 1.5, height: float = 2.2):
+        """Luz puntual en la celda (x, y) de esa planta (coordenadas de celda, admiten decimales)."""
+        self.lights.setdefault(level, []).append((x, y, color, radius, intensity, height))
 
     def put(self, level: int, x: int, y: int, name: str, flip: bool = False):
         layer = ROLE_LAYER[self.pieces[name].layer]
@@ -74,9 +80,29 @@ class CourseBuilder:
                 for (x, y), g in cells.items():
                     layer.set_tile_gid(x, y, g)
                 group.layers.append(layer)
+            if level in self.lights:
+                group.layers.append(self._light_layer(level, next_id, proj))
+                next_id += 1
             m.layers.append(group)
-        m.extra_attrib.update({"nextlayerid": str(next_id), "nextobjectid": "1"})
+        m.extra_attrib.update({"nextlayerid": str(next_id), "nextobjectid": str(self._next_object)})
         return m
+
+    _next_object = 1
+
+    def _light_layer(self, level, layer_id, proj):
+        import xml.etree.ElementTree as ET
+        og = tm.ObjectGroup(name="luces", id=layer_id)
+        for x, y, color, radius, intensity, height in self.lights[level]:
+            obj = tm.MapObject(id=self._next_object, name="luz", type="light",
+                               x=x * proj.tile_w, y=y * proj.row_h, properties={
+                                   "color": tm.Property("color", "color", color),
+                                   "radius": tm.Property("radius", "float", radius),
+                                   "intensity": tm.Property("intensity", "float", intensity),
+                                   "height": tm.Property("height", "float", height)})
+            obj.extra_children.append(ET.Element("point"))
+            og.objects.append(obj)
+            self._next_object += 1
+        return og
 
 
 def build_course(tmx_path: Path, tsx_path: Path, proj: Projection = DEFAULT_PROJECTION,
@@ -142,6 +168,14 @@ def build_course(tmx_path: Path, tsx_path: Path, proj: Projection = DEFAULT_PROJ
             b.put(0, x, y, "fill_solid")
             b.put(1, x, y, "fill_solid")
             b.put(2, x, y, "floor_flat_000")
+
+    # Luces: farolas en el suelo, una en la habitación, otra en lo alto de la plataforma y la torre
+    for x, y in ((10.5, 10.5), (2.5, 10.0), (18.5, 13.5), (11.0, 15.5)):
+        b.light(0, x, y, "#ffcf8a", radius=7.0, intensity=1.6)
+    b.light(0, 15.0, 5.0, "#ffe2b8", radius=6.0, intensity=1.4)
+    b.light(1, 6.0, 5.0, "#9ec8ff", radius=7.0, intensity=1.5)
+    b.light(1, 21.5, 7.5, "#ffb070", radius=6.0, intensity=1.4)
+    b.light(2, 23.0, 3.0, "#ff7050", radius=6.0, intensity=1.6)
 
     m = b.to_map(tsx_path, tmx_path, proj)
     tmx_path.parent.mkdir(parents=True, exist_ok=True)

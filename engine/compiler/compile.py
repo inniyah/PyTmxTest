@@ -150,14 +150,14 @@ def check_overflow(world: World, obstacles: np.ndarray, report: Report):
 # --- 4. Atlas ------------------------------------------------------------------------
 
 def _tileset_extra_maps(tmx: tm.TiledMap, tmx_path: Path):
-    """GID -> {"normal": PIL, "position": array uint16} para los tilesets que tengan esos mapas."""
+    """GID -> {"normal": RGBA8, "position": RGBA16, "albedo": RGBA8} de los tilesets que los tengan."""
     out: Dict[int, Dict[str, object]] = {}
     for ts in tmx.tilesets:
         if not ts.image or ts.columns <= 0:
             continue
         base = tmx_path.parent / Path(ts.source).parent if ts.source else tmx_path.parent
         maps = {}
-        for kind, prop in (("normal", "normal_map"), ("position", "position_map")):
+        for kind, prop in (("normal", "normal_map"), ("position", "position_map"), ("albedo", "albedo_map")):
             if prop in ts.properties:
                 path = base / str(ts.properties[prop].value)
                 maps[kind] = png16.read_rgba16(path) if kind == "position" else \
@@ -183,7 +183,8 @@ def build_atlas(tmx: tm.TiledMap, tmx_path: Path, used_gids: np.ndarray, report:
     b = ATLAS_BORDER
     sizes = [(images[g].width + 2 * b, images[g].height + 2 * b) for g in gids]
     placements, page_sizes = pack_shelves(sizes, ATLAS_MAX) if gids else ([], [])
-    kinds = ["color"] + [k for k in ("normal", "position") if gids and all(k in extras.get(g, {}) for g in gids)]
+    kinds = ["color"] + [k for k in ("normal", "position", "albedo")
+                         if gids and all(k in extras.get(g, {}) for g in gids)]
 
     pages = {}
     for kind in kinds:
@@ -217,6 +218,50 @@ def visual_values(world: World, region_of_gid: np.ndarray) -> np.ndarray:
     opacity_of = np.ones(256)
     opacity_of[:len(world.layers)] = [l.opacity for l in world.layers]
     return V.pack(region, roles, (tiles & FLIP_H_BIT) != 0, opacity_of[world.source])
+
+
+# --- Luces ----------------------------------------------------------------------------
+
+LIGHT_DEFAULTS = {"radius": 6.0, "intensity": 1.5, "height": 2.2, "color": "#ffd9a0"}
+
+
+def _parse_color(value) -> tuple:
+    """'#RRGGBB' o '#AARRGGBB' (sRGB) -> (r, g, b) lineales."""
+    text = str(value).lstrip("#")
+    if len(text) == 8:
+        text = text[2:]
+    r, g, b = (int(text[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+    return tuple(c ** 2.2 for c in (r, g, b))
+
+
+def collect_lights(tmx: tm.TiledMap, world: World, cell_w: float, cell_h: float, report: Report):
+    """Objetos de clase "light" de las capas de objetos; su planta es la del grupo (propiedad Z)."""
+    rows = []
+
+    def visit(layers, level):
+        for layer in layers:
+            if isinstance(layer, tm.LayerGroup):
+                z = layer.properties.get("Z")
+                visit(layer.layers, int(z.value) if z is not None else level)
+            elif isinstance(layer, tm.ObjectGroup):
+                for obj in layer.objects:
+                    if obj.type != "light":
+                        continue
+                    props = {k: p.value for k, p in obj.properties.items()}
+                    try:
+                        r, g, b = _parse_color(props.get("color", LIGHT_DEFAULTS["color"]))
+                        radius = float(props.get("radius", LIGHT_DEFAULTS["radius"]))
+                        intensity = float(props.get("intensity", LIGHT_DEFAULTS["intensity"]))
+                        height = float(props.get("height", LIGHT_DEFAULTS["height"]))
+                    except (TypeError, ValueError) as e:
+                        report.warnings.append(f"Luz '{obj.name or obj.id}' con propiedades no válidas: {e}")
+                        continue
+                    x = obj.x / tmx.tilewidth * cell_w
+                    z = obj.y / tmx.tileheight * cell_w
+                    rows.append((x, level * cell_h + height, z, r, g, b, radius, intensity))
+
+    visit(tmx.layers, 0)
+    return rows
 
 
 # --- 5. Columnas y chunks ------------------------------------------------------------
@@ -288,6 +333,13 @@ def compile_tmx(tmx_path, out_path, chunk_size: int = 32, compression: str = "zl
             store.write_chunk(chunk)
             chunks += 1
         store.write_atlas(regions, pages)
+        cell_w = float(next((p.value for ts in tmx.tilesets for k, p in ts.properties.items()
+                             if k == "cell_width_m"), 2.0))
+        cell_h = float(next((p.value for ts in tmx.tilesets for k, p in ts.properties.items()
+                             if k == "cell_height_m"), 3.0))
+        lights = collect_lights(tmx, world, cell_w, cell_h, report)
+        store.write_lights(lights)
+        report.stats["luces"] = len(lights)
         props = {k: p.value for ts in tmx.tilesets for k, p in ts.properties.items()}
         report.stats.update({
             "celdas_con_contenido": int(((obstacles != 0) | visual.any(-1)).sum()),

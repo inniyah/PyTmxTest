@@ -8,7 +8,8 @@ Esquema:
     meta          (key, value)                        valores JSON
     chunks        (cx, cy, col_start, ..., vis_index)  un chunk por fila, cada parte un BLOB
     atlas_regions (id, page, x, y, w, h, border)       región 1.. de cada tile visual
-    atlas_pages   (page, kind, png)                    kind: color, normal, position
+    atlas_pages   (page, kind, png)                    kind: color, albedo, normal, position
+    lights        (id, x, y, z, r, g, b, radius, intensity)   luces puntuales, en metros
 """
 
 import json
@@ -28,6 +29,8 @@ CREATE TABLE IF NOT EXISTS chunks (cx INTEGER, cy INTEGER,
 CREATE TABLE IF NOT EXISTS atlas_regions (id INTEGER PRIMARY KEY, page INTEGER,
     x INTEGER, y INTEGER, w INTEGER, h INTEGER, border INTEGER);
 CREATE TABLE IF NOT EXISTS atlas_pages (page INTEGER, kind TEXT, png BLOB, PRIMARY KEY (page, kind));
+CREATE TABLE IF NOT EXISTS lights (id INTEGER PRIMARY KEY, x REAL, y REAL, z REAL,
+    r REAL, g REAL, b REAL, radius REAL, intensity REAL);
 """
 
 
@@ -111,6 +114,17 @@ class SQLiteWorldStore(WorldStore):
         row = self.db.execute("SELECT png FROM atlas_pages WHERE page = ? AND kind = ?",
                               (page, kind)).fetchone()
         return row[0] if row else None
+
+    def write_lights(self, rows):
+        """Filas (x, y, z, r, g, b, radio, intensidad), en metros y color lineal 0-1."""
+        self.db.executemany("INSERT INTO lights (x, y, z, r, g, b, radius, intensity) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+
+    def lights(self):
+        try:
+            return self.db.execute("SELECT x, y, z, r, g, b, radius, intensity FROM lights").fetchall()
+        except sqlite3.OperationalError:                  # mundos compilados antes de las luces
+            return []
 
     def atlas_kinds(self):
         return [k for (k,) in self.db.execute("SELECT DISTINCT kind FROM atlas_pages ORDER BY kind")]

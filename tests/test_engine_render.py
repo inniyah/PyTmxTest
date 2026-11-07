@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from engine.compiler import compile_tmx
-from engine.render.geometry import AtlasLayout, WorldGeometry, chunk_quads
+from engine.render.geometry import FLOATS_PER_VERTEX, AtlasLayout, WorldGeometry, chunk_quads
 from engine.world import visual as V
 from engine.world.store import SQLiteWorldStore
 from engine.world.view import WorldView
@@ -40,7 +40,7 @@ def test_one_quad_per_visual_slot_anchored_to_its_cell(worlds):
     for key in [(0, 0)]:
         chunk = view.chunk(*key)
         quads = chunk_quads(chunk, geo, layout)
-        verts = np.concatenate(list(quads.values())).reshape(-1, 4, 8)
+        verts = np.concatenate(list(quads.values())).reshape(-1, 4, FLOATS_PER_VERTEX)
         assert len(verts) == int((V.region(chunk.visual) != 0).sum())
         # El borde inferior de cada quad está en el borde sur de su celda, subido por su planta
         x_cell = verts[:, 0, 4] / geo.cell_w
@@ -65,9 +65,9 @@ def test_horizontal_flip_swaps_u(worlds, tmp_path):
     layer.set_tile_gid(0, 0, layer.get_tile_gid(0, 0) | 0x80000000)
     src.save(worlds["course"].parent / "maps" / "flip.tmx")
     compile_tmx(worlds["course"].parent / "maps" / "flip.tmx", tmp_path / "flip.cworld")
-    a = chunk_quads(view.chunk(0, 0), geo, layout)[0].reshape(-1, 4, 8)
+    a = chunk_quads(view.chunk(0, 0), geo, layout)[0].reshape(-1, 4, FLOATS_PER_VERTEX)
     v2 = WorldView(SQLiteWorldStore(tmp_path / "flip.cworld"))
-    b = chunk_quads(v2.chunk(0, 0), geo, AtlasLayout.from_store(v2.store))[0].reshape(-1, 4, 8)
+    b = chunk_quads(v2.chunk(0, 0), geo, AtlasLayout.from_store(v2.store))[0].reshape(-1, 4, FLOATS_PER_VERTEX)
     qa = a[(a[:, 0, 4] == 0) & (a[:, 0, 6] == 0)][0]
     qb = b[(b[:, 0, 4] == 0) & (b[:, 0, 6] == 0)][0]
     assert np.allclose(qa[:, 2], qb[[1, 0, 3, 2], 2]) and np.allclose(qa[:, :2], qb[:, :2])
@@ -99,6 +99,7 @@ def test_gpu_matches_cpu_reference_pixel_by_pixel(worlds, gl_viewer_factory, wor
     W, H = 640, 400
     viewer = gl_viewer_factory(worlds[world], W, H, visible=False)
     try:
+        viewer.renderer.lighting.enabled = False          # la referencia compara la geometría y la oclusión
         g = viewer.renderer.geo
         viewer.camera.center_on(center[0] * g.tile_w, center[1] * g.row_h)
         viewer.camera.x, viewer.camera.y = round(viewer.camera.x), round(viewer.camera.y)
@@ -121,6 +122,7 @@ def test_character_half_hidden_by_the_doorway(worlds, gl_viewer_factory, tmp_pat
     from PIL import Image
     viewer = gl_viewer_factory(worlds["course"], 700, 460, visible=False, spawn=(14.0, 7.8))
     try:
+        viewer.renderer.lighting.enabled = False
         viewer.camera.zoom = 2.5
         viewer._center_on_player(1.0)
         viewer.screenshot(tmp_path / "door.png")
@@ -161,3 +163,77 @@ def test_walk_cycle_follows_the_sheet_order():
     seq = [sheet.walk_col(t / 8 + 1e-6, 8.0) for t in range(9)]
     assert sheet.walk_col(0.0, 8.0) == 0                        # quieto: de pie
     assert seq[:8] == [1, 2, 3, 0, 1, 2, 3, 0]                  # paso, de pie, otro paso, de pie…
+
+
+# --- Iluminación ------------------------------------------------------------------------
+
+def test_lights_are_compiled_from_tiled(worlds):
+    store = SQLiteWorldStore(worlds["course"])
+    lights = np.array(store.lights())
+    assert len(lights) == 8
+    assert (lights[:, 6] > 0).all() and (lights[:, 7] > 0).all()              # radio, intensidad
+    assert set(np.round(lights[:, 1] / 3.0 - 2.2 / 3.0).astype(int)) == {0, 1, 2}   # en tres plantas
+
+
+def test_light_defaults_and_colors():
+    from engine.compiler.compile import LIGHT_DEFAULTS, _parse_color
+    assert _parse_color("#ffffff") == (1.0, 1.0, 1.0)
+    assert _parse_color("#ff000000") == (0.0, 0.0, 0.0)                       # #AARRGGBB de Tiled
+    r, g, b = _parse_color(LIGHT_DEFAULTS["color"])
+    assert r > g > b > 0                                                      # cálida, en lineal
+
+
+def test_flipped_tiles_flip_their_normals(gl_viewer_factory, tmp_path):
+    """Una luz al este: la cara de una rampa volteada (mira al este) brilla más que la normal."""
+    from pathlib import Path
+
+    from PIL import Image
+
+    from tools.pieces.catalog import build_catalog
+    from tools.pieces.course import CourseBuilder
+    from tools.pieces.render import DEFAULT_PROJECTION
+    tsx = build_tileset(tmp_path / "assets")
+    b = CourseBuilder(8, 5, build_catalog())
+    for y in range(5):
+        for x in range(8):
+            if (x, y) not in ((2, 2), (5, 2)):
+                b.put(0, x, y, "floor_flat_000")
+    b.put(0, 2, 2, "floor_ramp_E_050")
+    b.put(0, 5, 2, "floor_ramp_E_050", flip=True)
+    for x in (3.6, 6.6):
+        b.light(0, x, 2.5, "#ffffff", radius=4.0, intensity=3.0, height=1.5)
+    b.to_map(Path(tsx), tmp_path / "f.tmx", DEFAULT_PROJECTION).save(tmp_path / "f.tmx")
+    assert compile_tmx(tmp_path / "f.tmx", tmp_path / "f.cworld").ok
+    v = gl_viewer_factory(tmp_path / "f.cworld", 1000, 500, visible=False, player=False)
+    try:
+        v.set_night(True)
+        v.camera.center_on(4 * 128, 2.5 * 92)
+        v.screenshot(tmp_path / "f.png")
+        img = np.asarray(Image.open(tmp_path / "f.png").convert("L")).astype(float)
+        g = v.renderer.geo
+
+        def face(cx):
+            X, Y, Z = (cx + 0.5) * 2, 2.25, 5.0
+            sx = int((X * 64 - v.camera.x) * v.camera.zoom)
+            sy = int((Z * g.sz - Y * g.sy - v.camera.y) * v.camera.zoom)
+            return img[sy - 3:sy + 4, sx - 3:sx + 4].mean()
+        assert face(5) > 1.5 * face(2)
+    finally:
+        v.close()
+
+
+def test_lantern_lights_around_the_player(worlds, gl_viewer_factory, tmp_path):
+    from PIL import Image
+    v = gl_viewer_factory(worlds["course"], 400, 300, visible=False, spawn=(10.5, 13.0))
+    try:
+        v.set_night(True)
+        v._center_on_player(1.0)
+        means = []
+        for lantern in (True, False):
+            v.lantern = lantern
+            v.screenshot(tmp_path / "l.png")
+            img = np.asarray(Image.open(tmp_path / "l.png").convert("L")).astype(float)
+            means.append(img[110:190, 140:260].mean())
+        assert means[0] > means[1] + 15
+    finally:
+        v.close()

@@ -113,7 +113,7 @@ def test_atlas_regions_reproduce_the_tile_images(gallery):
                 assert np.array_equal(page[ry:ry + h, rx:rx + w], tile)
                 checked.add(g)
     assert len(checked) == ts.tilecount == len(regions)          # las 106 regiones comprobadas
-    assert set(store.atlas_kinds()) == {"color", "normal", "position"}
+    assert set(store.atlas_kinds()) == {"color", "albedo", "normal", "position"}
 
 
 # --- Mapas sintéticos ----------------------------------------------------------------

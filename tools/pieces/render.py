@@ -12,6 +12,7 @@ la celda: así se ancla en Tiled y en el motor.
 
 Mapas que se generan para cada tile:
     color     RGBA 8 bits, sombreado plano con una luz fija y el contorno de las caras
+    albedo    RGBA 8 bits, el color del material sin luz (con el contorno): lo que ilumina el motor
     normal    RGBA 8 bits: (n · 0.5 + 0.5) · 255, ejes del mundo (X este, Y arriba, Z sur)
     posición  RGBA 16 bits: (x, y, z) en metros dentro de la celda, escalados a 0..65535
               con los rangos de ``Projection.position_range``; alfa = cobertura
@@ -71,12 +72,15 @@ class Projection:
 DEFAULT_PROJECTION = Projection()
 
 
-def render(faces: List[Tuple[np.ndarray, Tuple[float, float, float]]], proj: Projection = DEFAULT_PROJECTION):
-    """Devuelve (color uint8 (h, w, 4), normal uint8 (h, w, 4), posición uint16 (h, w, 4))."""
+def render(faces: List[Tuple[np.ndarray, Tuple[float, float, float]]], proj: Projection = DEFAULT_PROJECTION,
+           with_albedo: bool = False):
+    """Devuelve (color uint8 (h, w, 4), normal uint8 (h, w, 4), posición uint16 (h, w, 4)) y,
+    con ``with_albedo``, además el albedo uint8 (h, w, 4)."""
     w, h = proj.image_size
     depth = np.full((h, w), -np.inf)
     face_id = np.full((h, w), -1, dtype=np.int32)
     color = np.zeros((h, w, 3))
+    albedo = np.zeros((h, w, 3))
     normal = np.zeros((h, w, 3))
     position = np.zeros((h, w, 3))
 
@@ -115,6 +119,7 @@ def render(faces: List[Tuple[np.ndarray, Tuple[float, float, float]]], proj: Pro
             depth[j0:j1, i0:i1][win] = near[win]
             face_id[j0:j1, i0:i1][win] = fid
             color[j0:j1, i0:i1][win] = shade
+            albedo[j0:j1, i0:i1][win] = kd
             normal[j0:j1, i0:i1][win] = n
             position[j0:j1, i0:i1][win] = p3[win]
 
@@ -126,6 +131,7 @@ def render(faces: List[Tuple[np.ndarray, Tuple[float, float, float]]], proj: Pro
     edge = covered & ((centre != padded[1:-1, 2:]) | (centre != padded[1:-1, :-2])
                       | (centre != padded[2:, 1:-1]) | (centre != padded[:-2, 1:-1]))
     color[edge] *= EDGE_DARKEN
+    albedo[edge] *= EDGE_DARKEN
 
     rgba = np.zeros((h, w, 4), np.uint8)
     rgba[..., :3] = np.clip(color * 255 + 0.5, 0, 255)
@@ -140,4 +146,9 @@ def render(faces: List[Tuple[np.ndarray, Tuple[float, float, float]]], proj: Pro
         pos[..., axis] = np.clip((position[..., axis] - lo) / (hi - lo) * 65535 + 0.5, 0, 65535)
     pos[..., 3] = covered * 65535
     pos[~covered] = 0
-    return rgba, nrm, pos
+    if not with_albedo:
+        return rgba, nrm, pos
+    alb = np.zeros((h, w, 4), np.uint8)
+    alb[..., :3] = np.clip(albedo * 255 + 0.5, 0, 255)
+    alb[..., 3] = covered * 255
+    return rgba, nrm, pos, alb

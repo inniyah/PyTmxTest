@@ -77,6 +77,15 @@ def build_levels(tmx_path: Path, tsx_path: Path, proj: Projection = DEFAULT_PROJ
     for xx, yy in BALCONY:
         b.put(1, xx, yy, "floor_flat_000")
 
+    # Luces: calle, bajo el puente, las dos plantas del edificio y el balcón
+    for x, y in ((3.0, 12.0), (12.5, 12.5), (24.0, 13.0), (10.0, 3.0)):
+        b.light(0, x, y, "#ffcf8a", radius=7.0, intensity=1.6)
+    b.light(0, 6.5, 8.5, "#8fbfff", radius=5.0, intensity=1.3, height=1.8)
+    b.light(0, 15.5, 5.0, "#ffe2b8", radius=5.5, intensity=1.4)
+    b.light(0, 19.0, 8.0, "#ffd0a0", radius=5.0, intensity=1.2)
+    b.light(1, 17.5, 6.0, "#ffb070", radius=6.0, intensity=1.5)
+    b.light(1, 16.0, 10.5, "#ff9a6a", radius=4.0, intensity=1.2, height=1.6)
+
     m = b.to_map(tsx_path, tmx_path, proj)
     tmx_path.parent.mkdir(parents=True, exist_ok=True)
     m.save(tmx_path, encoding="csv")

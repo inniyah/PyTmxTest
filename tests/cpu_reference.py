@@ -2,7 +2,7 @@
 import io, numpy as np
 from PIL import Image
 from engine import png16
-from engine.render.geometry import chunk_quads
+from engine.render.geometry import FLOATS_PER_VERTEX, chunk_quads
 from engine.render.shaders import LEVEL_BIAS
 
 def cpu_render(renderer, camera, width, height):
@@ -19,7 +19,7 @@ def cpu_render(renderer, camera, width, height):
         if chunk is None: continue
         for page, verts in chunk_quads(chunk, g, renderer.layout).items():
             pw, ph = renderer.layout.page_sizes[page]
-            for q in verts.reshape(-1, 4, 8):
+            for q in verts.reshape(-1, 4, FLOATS_PER_VERTEX):
                 l, t = q[0, 0], q[0, 1]; w, h = q[1, 0] - l, q[2, 1] - t
                 u0, u1, v0 = q[0, 2], q[1, 2], q[0, 3]
                 sx, sy = int(round((l - camera.x) * camera.zoom)), int(round((t - camera.y) * camera.zoom))

@@ -102,8 +102,12 @@ def test_three_maps_share_the_layout(built):
     c = np.asarray(Image.open(out / "assets" / "pieces.png"))
     n = np.asarray(Image.open(out / "assets" / "pieces.n.png"))
     p = png16.read_rgba16(out / "assets" / "pieces.p.png")
-    assert c.shape[:2] == n.shape[:2] == p.shape[:2]
-    assert np.array_equal(c[..., 3] > 0, n[..., 3] > 0) and np.array_equal(c[..., 3] > 0, p[..., 3] > 0)
+    a = np.asarray(Image.open(out / "assets" / "pieces.a.png"))
+    assert c.shape[:2] == n.shape[:2] == p.shape[:2] == a.shape[:2]
+    for other in (n, p, a):
+        assert np.array_equal(c[..., 3] > 0, other[..., 3] > 0)
+    # El albedo no tiene sombreado: cada cara tiene el color del material, sin luz
+    assert (a[..., :3].astype(int) >= c[..., :3].astype(int) - 1)[c[..., 3] > 0].mean() > 0.95
 
 
 def test_gallery_loads_in_the_engine_world(built):

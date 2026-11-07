@@ -198,6 +198,9 @@ python -m engine.viewer maps/course/course.cworld --no-player --no-vsync
 | Rueda, `+` / `-` | Zoom |
 | PgUp / PgDn | Planta más alta que se dibuja |
 | C | Cómo ocultar lo que hay encima del personaje: círculo, planta entera o nada |
+| L | Iluminación sí / no |
+| N | Día / noche |
+| K | Farol del personaje |
 | T | Tinte por altura (más claro cuanto más alto) |
 | P | Profundidad por píxel en escala de grises |
 | Inicio | Centrar el mapa |
@@ -217,13 +220,21 @@ techos, también su contorno. Paso fijo de 60 Hz, con las consultas al mundo agr
 todos los cilindros a la vez (≈ 0.45 ms por paso con uno, ≈ 2.3 ms con cien). Un test de estrés
 (200 personajes andando y saltando al azar) comprueba que nadie se mete en el suelo.
 
+**Iluminación.** Por píxel y en espacio lineal: ambiente de cielo y suelo según la normal, un
+sol y hasta 32 luces puntuales (las más cercanas a la vista), sobre el albedo (color sin luz)
+y las normales del atlas; los personajes también se iluminan. Las luces se colocan en Tiled
+como objetos punto de clase `light` en una capa de objetos dentro de cada planta, con
+propiedades opcionales `color`, `radius` (m), `intensity` y `height` (m sobre el suelo de la
+planta); el compilador las guarda en la tabla `lights` del mundo. De día las luces puntuales
+se notan poco (25 %). Aún no hay sombras: la luz atraviesa las paredes.
+
 **Ocultar lo que hay encima.** Cuando el personaje tiene algo por encima de su planta en su
 celda o en las de alrededor (un forjado, un puente), se deja de dibujar lo que está por encima
 de su planta: en un círculo a su alrededor o en todo el mapa (tecla C). La detección es
 automática; no hay que marcar nada en Tiled.
 
 Opciones útiles: `--spawn X Y` (celda de aparición) y `--spawn-level N` (su planta),
-`--cut círculo|planta|no`, `--tint`, `--screenshot captura.png`
+`--cut círculo|planta|no`, `--night`, `--no-lighting`, `--tint`, `--screenshot captura.png`
 (dibujar, guardar y salir) y, con ella, `--walk DX DZ SEGUNDOS` para andar antes de capturar.
 
 ## Piezas de prueba (formato de celda de 32 bits)
@@ -241,6 +252,7 @@ python -m tools.pieces          # ~2 s
 | `assets/pieces/pieces.png` | Atlas de color, renderizado desde los `.obj` en la proyección oblicua |
 | `assets/pieces/pieces.n.png` | Normales por píxel, misma disposición |
 | `assets/pieces/pieces.p.png` | Posición 3D por píxel (RGBA de 16 bits), misma disposición |
+| `assets/pieces/pieces.a.png` | Albedo: el color del material sin luz, para la iluminación, misma disposición |
 | `assets/pieces/pieces.tsx` | Tileset de Tiled: cada tile lleva su clase y su parte de celda como propiedades |
 | `maps/gallery/gallery.tmx` | Galería con cada pieza en su celda y su nombre debajo |
 | `maps/course/course.tmx` | Recorrido en tres plantas: plataforma con escalera, habitación, muro diagonal, túnel, terraza con rampa ancha y torre |

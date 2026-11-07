@@ -155,6 +155,7 @@ def test_player_inside_the_building(world, viewer_factory, tmp_path, mode, visib
     from engine.viewer import CUT_MODES
     v = viewer_factory(world, 480, 320, visible=False, spawn=(17.5, 6.5), spawn_level=0)
     try:
+        v.renderer.lighting.enabled = False
         v.cut_mode = CUT_MODES.index(mode)
         v._center_on_player(1.0)
         v.screenshot(tmp_path / "inside.png")

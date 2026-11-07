@@ -6,7 +6,8 @@
 Controles: WASD/flechas: andar (sin personaje, mover la vista) · Espacio: saltar ·
 arrastrar con el ratón: mover la vista (deja de seguir al personaje; F vuelve a seguirlo) ·
 rueda o +/-: zoom · PgUp/PgDn: planta más alta que se dibuja · C: cómo ocultar lo que hay encima del personaje
-(círculo, planta entera o nada) · T: tinte por altura ·
+(círculo, planta entera o nada) · L: iluminación sí/no · N: día/noche · K: farol ·
+T: tinte por altura ·
 P: profundidad por píxel · Inicio: centrar · ESC: salir.
 """
 
@@ -22,7 +23,7 @@ from PIL import Image
 
 from engine.physics import WalkerPhysics, Walkers
 from engine.render.sprites import ROWS_4, SpriteRenderer, SpriteSheet, delete_sheet, facing_index
-from engine.render.world_renderer import Camera, WorldRenderer
+from engine.render.world_renderer import Camera, Lighting, WorldRenderer
 from engine.world.store import SQLiteWorldStore
 from engine.world.view import WorldView
 
@@ -33,6 +34,7 @@ FOLLOW_RATE = 8.0            # 1/s: lo deprisa que la cámara alcanza al persona
 PLAYER_SHEET = Path(__file__).resolve().parent.parent / "assets" / "people" / "guy.png"
 CUT_MODES = ("círculo", "planta", "no")         # cómo se oculta lo que hay encima del personaje
 CUT_RADIUS_CELLS = 2.5
+LANTERN = {"color": (1.0, 0.62, 0.30), "radius": 5.0, "intensity": 1.3, "height": 1.5}
 WALK_FPS = 8.0
 
 
@@ -68,6 +70,8 @@ class Viewer:
         self.follow = player
         self.facing, self.anim_time, self.accumulator = 1, 0.0, 0.0     # mirando al sur
         self.cut_mode = 0
+        self.night = False
+        self.lantern = True
         if self.player is not None:
             self._center_on_player(1.0)
 
@@ -119,6 +123,12 @@ class Viewer:
                 r.height_tint = not r.height_tint
             elif key == glfw.KEY_C:
                 self.cut_mode = (self.cut_mode + 1) % len(CUT_MODES)
+            elif key == glfw.KEY_L:
+                r.lighting.enabled = not r.lighting.enabled
+            elif key == glfw.KEY_N:
+                self.set_night(not self.night)
+            elif key == glfw.KEY_K:
+                self.lantern = not self.lantern
             elif key == glfw.KEY_F and self.player is not None:
                 self.follow = True
             elif key == glfw.KEY_SPACE and self.player is not None:
@@ -201,6 +211,20 @@ class Viewer:
                 return True
         return False
 
+    def set_night(self, night: bool):
+        enabled = self.renderer.lighting.enabled
+        self.night = night
+        self.renderer.lighting = Lighting.night(enabled) if night else Lighting.day(enabled)
+
+    def update_lights(self):
+        """Luces dinámicas: el farol del personaje."""
+        r = self.renderer
+        r.dynamic_lights = []
+        if self.player is not None and self.lantern:
+            X, Y, Z = self.player.pos[0]
+            c = LANTERN["color"]
+            r.dynamic_lights.append((X, Y + LANTERN["height"], Z, *c, LANTERN["radius"], LANTERN["intensity"]))
+
     def update_cut(self):
         """Ocultar lo que hay encima del personaje según el modo (tecla C)."""
         r = self.renderer
@@ -216,6 +240,7 @@ class Viewer:
     def frame(self):
         r = self.renderer
         self.update_cut()
+        self.update_lights()
         r.draw(self.camera, glfw.get_framebuffer_size(self.window))
         if self.player is not None:
             pos = self.player.pos[0]
@@ -225,7 +250,7 @@ class Viewer:
                 self.sprites.draw(self.sheet, [(tuple(pos), float(self.player.support[0]),
                                                 float(self.player.height[0]), float(self.player.radius[0]),
                                                 ROWS_4[self.facing], col)],
-                                  self.camera, r.show_depth)
+                                  self.camera, r.show_depth, lights=r)
 
     def screenshot(self, path):
         for _ in range(2):                    # el primer frame carga chunks y texturas
@@ -257,7 +282,9 @@ class Viewer:
                     f"{self.world_path.name} · {frames / max(now - title_at, 1e-6):.0f} fps · "
                     f"zoom {self.camera.zoom:.2f} · chunks {len(r.meshes)} · draw calls {r.draw_calls} · "
                     f"planta máx {r.max_level}{extra} · ocultar encima: {CUT_MODES[self.cut_mode]}"
-                    f"{' (activo)' if r.cut_level is not None else ''}{' · TINTE' if r.height_tint else ''}"
+                    f"{' (activo)' if r.cut_level is not None else ''}"
+                    f" · luz {'de noche' if self.night else 'de día'}{'' if r.lighting.enabled else ' (apagada)'}"
+                    f"{' · TINTE' if r.height_tint else ''}"
                     f"{' · PROFUNDIDAD' if r.show_depth else ''}")
                 title_at, frames = now, 0
 
@@ -284,6 +311,8 @@ def main(argv=None) -> int:
     parser.add_argument("--tint", action="store_true", help="empezar con el tinte por altura")
     parser.add_argument("--cut", choices=CUT_MODES, default=CUT_MODES[0],
                         help="cómo ocultar lo que hay encima del personaje")
+    parser.add_argument("--night", action="store_true", help="empezar de noche")
+    parser.add_argument("--no-lighting", action="store_true", help="sin iluminación (colores del tileset)")
     parser.add_argument("--walk", type=float, nargs=3, action="append", metavar=("DX", "DZ", "S"),
                         help="con --screenshot: andar en esa dirección S segundos antes de capturar")
     args = parser.parse_args(argv)
@@ -302,6 +331,8 @@ def main(argv=None) -> int:
         viewer.renderer.show_depth = args.depth
         viewer.renderer.height_tint = args.tint
         viewer.cut_mode = CUT_MODES.index(args.cut)
+        viewer.set_night(args.night)
+        viewer.renderer.lighting.enabled = not args.no_lighting
         if args.screenshot:
             for dx, dz, secs in args.walk or []:
                 for _ in range(int(secs * PHYSICS_HZ)):

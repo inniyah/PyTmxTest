@@ -5,7 +5,7 @@ abajo al borde sur de la celda y desplazada hacia arriba según su planta. Los v
 llevan, además de la posición y las UV, el origen de la celda en metros, que el shader
 suma a la posición del mapa de posición para obtener la profundidad por píxel.
 
-Vértice: [x_px, y_px, u, v, origen_x_m, origen_y_m, origen_z_m, alfa] (8 floats).
+Vértice: [x_px, y_px, u, v, origen_x_m, origen_y_m, origen_z_m, alfa, volteado] (9 floats).
 """
 
 import io
@@ -18,7 +18,7 @@ from PIL import Image
 from engine.world import visual as V
 from engine.world.chunk import ChunkData
 
-FLOATS_PER_VERTEX = 8
+FLOATS_PER_VERTEX = 9
 
 
 @dataclass(frozen=True)
@@ -136,5 +136,6 @@ def chunk_quads(chunk: ChunkData, geo: WorldGeometry, atlas: AtlasLayout) -> Dic
         verts[:, :, 3] = np.stack([v0, v0, v1, v1], axis=1)
         verts[:, :, 4:7] = origin[sel][:, None, :]
         verts[:, :, 7] = alpha[sel][:, None]
+        verts[:, :, 8] = flip[sel][:, None]
         out[int(page)] = verts.reshape(-1, FLOATS_PER_VERTEX)
     return out

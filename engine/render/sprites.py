@@ -21,8 +21,8 @@ from OpenGL.GL import (
 from OpenGL.GL.shaders import compileProgram, compileShader
 from PIL import Image
 
-from .shaders import LEVEL_BIAS
-from .world_renderer import _texture
+from .shaders import LEVEL_BIAS, LIGHTING_GLSL
+from .world_renderer import LIGHT_UNIFORMS, _texture
 
 SPRITE_VERTEX = """
 #version 330 core
@@ -32,9 +32,11 @@ layout(location = 2) in vec2 a_world;    // (Y, Z) en metros del punto
 uniform mat4 u_projection;
 out vec2 v_uv;
 out vec2 v_world;
+out float v_px;
 void main() {
     v_uv = a_uv;
     v_world = a_world;
+    v_px = a_pos.x;
     gl_Position = u_projection * vec4(a_pos, 0.0, 1.0);
 }
 """
@@ -43,12 +45,15 @@ SPRITE_FRAGMENT = """
 #version 330 core
 in vec2 v_uv;
 in vec2 v_world;
+in float v_px;
+uniform float u_m_per_px;          // metros por píxel de pantalla en X
 uniform sampler2D u_sheet;
 uniform int u_shadow;
 uniform vec2 u_scale;              // (sz, sy)
 uniform vec2 u_closeness_range;
 uniform float u_bias;              // desempate con el suelo de la planta en la que está
 uniform int u_show_depth;
+""" + LIGHTING_GLSL + """
 out vec4 frag;
 void main() {
     vec4 color;
@@ -64,6 +69,13 @@ void main() {
     float depth = clamp(1.0 - (closeness - u_closeness_range.x)
                         / (u_closeness_range.y - u_closeness_range.x), 0.0, 1.0);
     gl_FragDepth = depth;
+    if (u_lighting == 1 && u_shadow == 0) {
+        // El sprite, de cara a la cámara (sin normales): luz "envolvente" para que también le
+        // alumbre una luz que esté a un lado
+        vec3 world = vec3(v_px * u_m_per_px, v_world.x, v_world.y);
+        vec3 n = normalize(vec3(0.0, 0.35, 1.0));
+        color.rgb = to_srgb(to_linear(color.rgb) * light_at(world, n, 0.6));
+    }
     frag = (u_show_depth == 1 && u_shadow == 0) ? vec4(vec3(1.0 - depth), 1.0) : color;
 }
 """
@@ -132,7 +144,8 @@ class SpriteRenderer:
         self.program = compileProgram(compileShader(SPRITE_VERTEX, GL_VERTEX_SHADER),
                                       compileShader(SPRITE_FRAGMENT, GL_FRAGMENT_SHADER))
         self.u = {k: glGetUniformLocation(self.program, k) for k in (
-            "u_projection", "u_sheet", "u_shadow", "u_scale", "u_closeness_range", "u_bias", "u_show_depth")}
+            "u_projection", "u_sheet", "u_shadow", "u_scale", "u_closeness_range", "u_bias", "u_show_depth",
+            "u_m_per_px", *LIGHT_UNIFORMS)}
         self.vao, self.vbo = glGenVertexArrays(1), glGenBuffers(1)
         glBindVertexArray(self.vao)
         glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
@@ -171,9 +184,14 @@ class SpriteRenderer:
             corners.append((px, pz * g.sz - ground_y * g.sy, du, dv, ground_y, pz))
         return self._quad(corners)
 
-    def _draw(self, verts, texture, shadow, bias, camera, show_depth):
+    def _draw(self, verts, texture, shadow, bias, camera, show_depth, lights=None):
         g = self.geo
         glUseProgram(self.program)
+        glUniform1f(self.u["u_m_per_px"], g.cell_w / g.tile_w)
+        if lights is not None:
+            lights.set_light_uniforms(self.u, camera)
+        else:
+            glUniform1i(self.u["u_lighting"], 0)
         glUniformMatrix4fv(self.u["u_projection"], 1, GL_FALSE, camera.projection().T)
         glUniform1i(self.u["u_sheet"], 0)
         glUniform1i(self.u["u_shadow"], int(shadow))
@@ -191,8 +209,9 @@ class SpriteRenderer:
         glBindVertexArray(0)
         glUseProgram(0)
 
-    def draw(self, sheet: SpriteSheet, actors, camera, show_depth=False):
-        """``actors``: lista de (pies (X, Y, Z), suelo bajo los pies, alto, radio, fila, columna)."""
+    def draw(self, sheet: SpriteSheet, actors, camera, show_depth=False, lights=None):
+        """``actors``: lista de (pies (X, Y, Z), suelo bajo los pies, alto, radio, fila, columna).
+        ``lights``: el WorldRenderer, para iluminar con sus mismas luces (o None, sin luz)."""
         g = self.geo
         # Sombras primero, sin escribir profundidad (no deben tapar los pies)
         glDepthMask(GL_FALSE)
@@ -203,7 +222,8 @@ class SpriteRenderer:
         glDepthMask(GL_TRUE)
         for feet, _ground, h, _radius, row, col in actors:
             bias = LEVEL_BIAS * np.floor(feet[1] / g.cell_h + 1e-6) + 0.05
-            self._draw(self.sprite_quad(sheet, feet, h, row, col), sheet.texture, False, bias, camera, show_depth)
+            self._draw(self.sprite_quad(sheet, feet, h, row, col), sheet.texture, False, bias, camera, show_depth,
+                       lights)
 
     def delete(self):
         glDeleteVertexArrays(1, [self.vao])

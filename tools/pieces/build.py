@@ -35,18 +35,20 @@ def build_tileset(out: Path, proj: Projection = DEFAULT_PROJECTION, pieces: List
     rows = math.ceil(len(pieces) / COLUMNS)
     color = np.zeros((rows * th, COLUMNS * tw, 4), np.uint8)
     normal = np.zeros_like(color)
+    albedo = np.zeros_like(color)
     position = np.zeros((rows * th, COLUMNS * tw, 4), np.uint16)
 
     for i, piece in enumerate(pieces):
         obj_path = obj_dir / f"{piece.name}.obj"
         write_obj(obj_path, mesh_for(piece.spec, proj.cell), piece.name)
-        c, n, p = render(read_obj(obj_path), proj)          # el tile sale del .obj
+        c, n, p, a = render(read_obj(obj_path), proj, with_albedo=True)     # el tile sale del .obj
         r, col = divmod(i, COLUMNS)
         sl = (slice(r * th, (r + 1) * th), slice(col * tw, (col + 1) * tw))
-        color[sl], normal[sl], position[sl] = c, n, p
+        color[sl], normal[sl], position[sl], albedo[sl] = c, n, p, a
 
     Image.fromarray(color).save(out / f"{TILESET_NAME}.png")
     Image.fromarray(normal).save(out / f"{TILESET_NAME}.n.png")
+    Image.fromarray(albedo).save(out / f"{TILESET_NAME}.a.png")
     png16.write_rgba16(out / f"{TILESET_NAME}.p.png", position)
 
     tileset = tm.Tileset(firstgid=1, name=TILESET_NAME, tilewidth=tw, tileheight=th,
@@ -57,6 +59,7 @@ def build_tileset(out: Path, proj: Projection = DEFAULT_PROJECTION, pieces: List
         "cell_width_m": proj.cell.width, "cell_height_m": proj.cell.height,
         "row_height_px": proj.row_h, "level_height_px": proj.level_h,
         "normal_map": f"{TILESET_NAME}.n.png", "position_map": f"{TILESET_NAME}.p.png",
+        "albedo_map": f"{TILESET_NAME}.a.png",
         "position_range_m": f"x {xr[0]:g} {xr[1]:g}; y {yr[0]:g} {yr[1]:g}; z {zr[0]:g} {zr[1]:g}",
     }
     for key, value in meta.items():

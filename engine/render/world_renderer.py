@@ -15,14 +15,16 @@ from OpenGL.GL import (
     GL_ARRAY_BUFFER, GL_BLEND, GL_CLAMP_TO_EDGE, GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT,
     GL_DEPTH_TEST, GL_ELEMENT_ARRAY_BUFFER, GL_FALSE, GL_FLOAT, GL_FRAGMENT_SHADER, GL_LEQUAL,
     GL_NEAREST, GL_ONE_MINUS_SRC_ALPHA, GL_RGBA, GL_RGBA8, GL_RGBA16, GL_SRC_ALPHA,
-    GL_STATIC_DRAW, GL_TEXTURE0, GL_TEXTURE1, GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+    GL_STATIC_DRAW, GL_TEXTURE0, GL_TEXTURE1, GL_TEXTURE2, GL_TEXTURE3, GL_TEXTURE_2D,
+    GL_TEXTURE_MAG_FILTER,
     GL_TEXTURE_MIN_FILTER, GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T, GL_TRIANGLES,
     GL_UNSIGNED_BYTE, GL_UNSIGNED_INT, GL_UNSIGNED_SHORT, GL_VERTEX_SHADER, glActiveTexture,
     glBindBuffer, glBindTexture, glBindVertexArray, glBlendFunc, glBufferData, glClear,
     glClearColor, glClearDepth, glDeleteBuffers, glDeleteTextures, glDeleteVertexArrays,
     glDepthFunc, glDrawElements, glEnable, glEnableVertexAttribArray, glGenBuffers,
     glGenTextures, glGenVertexArrays, glGetUniformLocation, glTexImage2D, glTexParameteri,
-    glUniform1f, glUniform1i, glUniform2f, glUniform3f, glUniformMatrix4fv, glUseProgram,
+    glUniform1f, glUniform1i, glUniform2f, glUniform3f, glUniform3fv, glUniform4fv,
+    glUniformMatrix4fv, glUseProgram,
     glVertexAttribPointer, glViewport,
 )
 from OpenGL.GL.shaders import compileProgram, compileShader
@@ -32,7 +34,7 @@ from engine import png16
 from engine.world.view import WorldView
 
 from .geometry import FLOATS_PER_VERTEX, AtlasLayout, WorldGeometry, chunk_quads
-from .shaders import LEVEL_BIAS, TILE_FRAGMENT, TILE_VERTEX
+from .shaders import LEVEL_BIAS, MAX_LIGHTS, TILE_FRAGMENT, TILE_VERTEX
 
 
 def ortho(left, right, bottom, top) -> np.ndarray:
@@ -40,6 +42,30 @@ def ortho(left, right, bottom, top) -> np.ndarray:
     m[0, 0], m[1, 1], m[2, 2] = 2 / (right - left), 2 / (top - bottom), -1
     m[0, 3], m[1, 3] = -(right + left) / (right - left), -(top + bottom) / (top - bottom)
     return m
+
+
+LIGHT_UNIFORMS = ("u_lighting", "u_sky", "u_ground", "u_sun_dir", "u_sun_color", "u_num_lights",
+                  "u_light_pos[0]", "u_light_col[0]", "u_lamps")
+
+
+@dataclass
+class Lighting:
+    """Ambiente de cielo y suelo, sol y si la iluminación está activa. Colores lineales."""
+    enabled: bool = True
+    sky: tuple = (0.42, 0.46, 0.55)
+    ground: tuple = (0.20, 0.18, 0.16)
+    sun_dir: tuple = (-0.45, 0.80, 0.55)       # hacia el sol: alto, al suroeste (de cara a la cámara)
+    sun_color: tuple = (0.85, 0.80, 0.70)
+    lamps: float = 0.25                        # factor de las luces puntuales (de día, poco)
+
+    @classmethod
+    def day(cls, enabled=True):
+        return cls(enabled=enabled)
+
+    @classmethod
+    def night(cls, enabled=True):
+        return cls(enabled=enabled, sky=(0.035, 0.045, 0.08), ground=(0.015, 0.015, 0.02),
+                   sun_dir=(0.3, 0.9, -0.2), sun_color=(0.06, 0.08, 0.14), lamps=1.0)
 
 
 @dataclass
@@ -81,8 +107,10 @@ def _texture(data: np.ndarray, sixteen_bits: bool):
 
 
 class GpuAtlas:
+    """Páginas del atlas en la GPU: color y posición (siempre); albedo y normales (si las hay)."""
+
     def __init__(self, store, layout: AtlasLayout):
-        self.color, self.position = {}, {}
+        self.color, self.position, self.albedo, self.normal = {}, {}, {}, {}
         for page in layout.page_sizes:
             with Image.open(io.BytesIO(store.atlas_page(page, "color"))) as im:
                 self.color[page] = _texture(np.asarray(im.convert("RGBA")), False)
@@ -90,9 +118,14 @@ class GpuAtlas:
             if raw is None:
                 raise ValueError("El mundo no tiene mapa de posición: hace falta para la profundidad por píxel")
             self.position[page] = _texture(png16.decode_rgba16(raw), True)
+            for kind, dest in (("albedo", self.albedo), ("normal", self.normal)):
+                raw = store.atlas_page(page, kind)
+                if raw is not None:
+                    with Image.open(io.BytesIO(raw)) as im:
+                        dest[page] = _texture(np.asarray(im.convert("RGBA")), False)
 
     def delete(self):
-        glDeleteTextures(list(self.color.values()) + list(self.position.values()))
+        glDeleteTextures([t for d in (self.color, self.position, self.albedo, self.normal) for t in d.values()])
 
 
 class ChunkMesh:
@@ -107,7 +140,7 @@ class ChunkMesh:
             glBindBuffer(GL_ARRAY_BUFFER, vbo)
             glBufferData(GL_ARRAY_BUFFER, verts.nbytes, verts, GL_STATIC_DRAW)
             stride = FLOATS_PER_VERTEX * 4
-            for loc, size, off in ((0, 2, 0), (1, 2, 2), (2, 3, 4), (3, 1, 7)):
+            for loc, size, off in ((0, 2, 0), (1, 2, 2), (2, 3, 4), (3, 1, 7), (4, 1, 8)):
                 glEnableVertexAttribArray(loc)
                 glVertexAttribPointer(loc, size, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(off * 4))
             idx = (np.arange(n, dtype=np.uint32)[:, None] * 4 + np.array([0, 1, 2, 0, 2, 3], np.uint32)).ravel()
@@ -138,6 +171,10 @@ class WorldRenderer:
         self.cut_level = None
         self.cut_center = (0.0, 0.0)
         self.cut_radius = -1.0
+        # Iluminación: luces del mundo (metros, color lineal) + luces dinámicas (el farol)
+        self.lighting = Lighting()
+        self.world_lights = np.array(view.store.lights(), dtype=np.float32).reshape(-1, 8)
+        self.dynamic_lights = []
         self.draw_calls = 0
 
         self.program = compileProgram(compileShader(TILE_VERTEX, GL_VERTEX_SHADER),
@@ -145,7 +182,8 @@ class WorldRenderer:
         self.u = {name: glGetUniformLocation(self.program, name) for name in (
             "u_projection", "u_color", "u_position", "u_pos_min", "u_pos_max", "u_scale",
             "u_closeness_range", "u_max_y", "u_show_depth", "u_level_bias", "u_cell_h",
-            "u_height_tint", "u_cut_y", "u_cut_center", "u_cut_radius")}
+            "u_height_tint", "u_cut_y", "u_cut_center", "u_cut_radius", "u_albedo", "u_normal",
+            "u_has_albedo", "u_has_normal", "u_cell_w", *LIGHT_UNIFORMS)}
 
     # --- Qué chunks se ven ---
 
@@ -207,6 +245,10 @@ class WorldRenderer:
         glUniform1f(self.u["u_cut_y"], cut_y)
         glUniform2f(self.u["u_cut_center"], *self.cut_center)
         glUniform1f(self.u["u_cut_radius"], self.cut_radius)
+        glUniform1i(self.u["u_albedo"], 2)
+        glUniform1i(self.u["u_normal"], 3)
+        glUniform1f(self.u["u_cell_w"], g.cell_w)
+        self.set_light_uniforms(self.u, camera)
 
         self.draw_calls = 0
         for key in visible:                               # de norte a sur: mejor mezcla de transparencias
@@ -215,11 +257,54 @@ class WorldRenderer:
                 glBindTexture(GL_TEXTURE_2D, self.atlas.color[page])
                 glActiveTexture(GL_TEXTURE1)
                 glBindTexture(GL_TEXTURE_2D, self.atlas.position[page])
+                has_albedo, has_normal = page in self.atlas.albedo, page in self.atlas.normal
+                glUniform1i(self.u["u_has_albedo"], int(has_albedo))
+                glUniform1i(self.u["u_has_normal"], int(has_normal))
+                if has_albedo:
+                    glActiveTexture(GL_TEXTURE2)
+                    glBindTexture(GL_TEXTURE_2D, self.atlas.albedo[page])
+                if has_normal:
+                    glActiveTexture(GL_TEXTURE3)
+                    glBindTexture(GL_TEXTURE_2D, self.atlas.normal[page])
                 glBindVertexArray(vao)
                 glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, None)
                 self.draw_calls += 1
         glBindVertexArray(0)
         glUseProgram(0)
+
+    # --- Luces ---
+
+    def active_lights(self, camera: Camera) -> np.ndarray:
+        """Hasta MAX_LIGHTS luces (filas x, y, z, r, g, b, radio, intensidad), las más cercanas a la vista."""
+        rows = [self.world_lights] + [np.asarray(self.dynamic_lights, np.float32).reshape(-1, 8)]
+        lights = np.concatenate(rows) if any(len(r) for r in rows) else np.zeros((0, 8), np.float32)
+        if len(lights) > MAX_LIGHTS:
+            g = self.geo
+            l, t, r, b = camera.bounds()
+            cx, cy = (l + r) / 2, (t + b) / 2
+            sx = lights[:, 0] * g.tile_w / g.cell_w
+            sy = lights[:, 2] * g.sz - lights[:, 1] * g.sy
+            order = np.argsort((sx - cx) ** 2 + (sy - cy) ** 2)
+            lights = lights[order[:MAX_LIGHTS]]
+        return lights
+
+    def set_light_uniforms(self, u, camera: Camera):
+        """Uniforms de iluminación, comunes a los tiles y a los sprites."""
+        L = self.lighting
+        glUniform1i(u["u_lighting"], int(L.enabled))
+        glUniform3f(u["u_sky"], *L.sky)
+        glUniform3f(u["u_ground"], *L.ground)
+        sun = np.asarray(L.sun_dir, float)
+        glUniform3f(u["u_sun_dir"], *(sun / np.linalg.norm(sun)))
+        glUniform3f(u["u_sun_color"], *L.sun_color)
+        glUniform1f(u["u_lamps"], L.lamps)
+        lights = self.active_lights(camera)
+        glUniform1i(u["u_num_lights"], len(lights))
+        if len(lights):
+            pos = np.concatenate([lights[:, 0:3], lights[:, 6:7]], axis=1).astype(np.float32)
+            col = (lights[:, 3:6] * lights[:, 7:8]).astype(np.float32)
+            glUniform4fv(u["u_light_pos[0]"], len(lights), pos)
+            glUniform3fv(u["u_light_col[0]"], len(lights), col)
 
     def delete(self):
         for mesh in self.meshes.values():

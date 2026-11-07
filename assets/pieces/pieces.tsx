@@ -7,6 +7,7 @@
   <property name="level_height_px" type="int" value="133" />
   <property name="normal_map" value="pieces.n.png" />
   <property name="position_map" value="pieces.p.png" />
+  <property name="albedo_map" value="pieces.a.png" />
   <property name="position_range_m" value="x 0 2; y 0 3.75; z 0 2" />
  </properties>
  <image source="pieces.png" width="2048" height="1813" />

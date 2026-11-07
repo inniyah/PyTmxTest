@@ -22,6 +22,45 @@ fórmula, con la altura interpolada a lo alto del sprite.
 """
 
 LEVEL_BIAS = 0.1     # píxeles de cercanía por planta (desempate de superficies coincidentes)
+MAX_LIGHTS = 32      # luces puntuales por frame (las más cercanas a la vista)
+
+# Iluminación (común a tiles y sprites), en espacio lineal: ambiente de cielo y suelo según la
+# normal, un sol direccional y luces puntuales con caída suave hasta su radio.
+LIGHTING_GLSL = """
+uniform int u_lighting;
+uniform vec3 u_sky;
+uniform vec3 u_ground;
+uniform vec3 u_sun_dir;           // hacia el sol, normalizado
+uniform vec3 u_sun_color;
+uniform int u_num_lights;
+uniform vec4 u_light_pos[@MAX_LIGHTS@];     // xyz en metros, w = radio
+uniform vec3 u_light_col[@MAX_LIGHTS@];     // color lineal por intensidad
+uniform float u_lamps;            // factor de las luces puntuales (de día se notan menos)
+
+vec3 light_at(vec3 world, vec3 n, float wrap) {
+    vec3 light = mix(u_ground, u_sky, n.y * 0.5 + 0.5);
+    light += u_sun_color * max((dot(n, u_sun_dir) + wrap) / (1.0 + wrap), 0.0);
+    for (int i = 0; i < u_num_lights; i++) {
+        vec3 d = u_light_pos[i].xyz - world;
+        float dist = length(d);
+        float r = u_light_pos[i].w;
+        if (dist < r) {
+            float k = 1.0 - (dist * dist) / (r * r);
+            float lambert = max((dot(n, d / max(dist, 1e-4)) + wrap) / (1.0 + wrap), 0.0);
+            light += u_lamps * u_light_col[i] * k * k * lambert;
+        }
+    }
+    return light;
+}
+
+vec3 to_linear(vec3 c) { return pow(c, vec3(2.2)); }
+// Hombro suave: hasta 0.8 sin cambios; por encima se acerca a 1 sin recortar en seco
+vec3 shoulder(vec3 c) {
+    vec3 over = max(c - 0.8, 0.0);
+    return min(c, vec3(0.8)) + 0.2 * (1.0 - exp(-over / 0.2));
+}
+vec3 to_srgb(vec3 c) { return pow(shoulder(max(c, 0.0)), vec3(1.0 / 2.2)); }
+""".replace("@MAX_LIGHTS@", str(MAX_LIGHTS))
 
 TILE_VERTEX = """
 #version 330 core
@@ -29,12 +68,14 @@ layout(location = 0) in vec2 a_pos;       // píxeles de mundo (y hacia abajo)
 layout(location = 1) in vec2 a_uv;
 layout(location = 2) in vec3 a_origin;    // origen de la celda en metros (X este, Y arriba, Z sur)
 layout(location = 3) in float a_alpha;
+layout(location = 4) in float a_flip;
 
 uniform mat4 u_projection;
 
 out vec2 v_uv;
 out vec3 v_origin;
 out float v_alpha;
+out float v_flip;
 out float v_screen_y;             // posición en pantalla del píxel, en píxeles de mundo
 out vec2 v_pos;
 
@@ -44,12 +85,14 @@ void main() {
     v_alpha = a_alpha;
     v_screen_y = a_pos.y;
     v_pos = a_pos;
+    v_flip = a_flip;
     gl_Position = u_projection * vec4(a_pos, 0.0, 1.0);
 }
 """
 
 TILE_FRAGMENT = """
 #version 330 core
+in float v_flip;
 in vec2 v_uv;
 in vec3 v_origin;
 in float v_alpha;
@@ -70,7 +113,12 @@ uniform int u_height_tint;        // 1: aclarar con la altura para leer las plan
 uniform float u_cut_y;            // ocultar las celdas cuyo origen esté por encima (metros)...
 uniform vec2 u_cut_center;        // ...dentro de este círculo (píxeles de mundo)...
 uniform float u_cut_radius;       // ...de este radio; negativo = en todo el mapa
-
+uniform sampler2D u_albedo;       // color sin luz (si el atlas lo tiene)
+uniform sampler2D u_normal;
+uniform int u_has_albedo;
+uniform int u_has_normal;
+uniform float u_cell_w;
+""" + LIGHTING_GLSL + """
 out vec4 frag;
 
 void main() {
@@ -89,6 +137,17 @@ void main() {
                         / (u_closeness_range.y - u_closeness_range.x), 0.0, 1.0);
     gl_FragDepth = depth;
     vec3 rgb = color.rgb;
+    if (u_lighting == 1) {
+        vec3 base = (u_has_albedo == 1) ? texture(u_albedo, v_uv).rgb : color.rgb;
+        vec3 n = vec3(0.0, 1.0, 0.0);
+        if (u_has_normal == 1) {
+            n = texture(u_normal, v_uv).rgb * 2.0 - 1.0;
+            if (v_flip > 0.5) n.x = -n.x;          // tile volteado: la normal también
+            n = normalize(n);
+        }
+        if (v_flip > 0.5) local.x = u_cell_w - local.x;
+        rgb = to_srgb(to_linear(base) * light_at(v_origin + local, n, 0.0));
+    }
     if (u_height_tint == 1) rgb *= clamp(0.78 + 0.11 * height / u_cell_h, 0.55, 1.35);
     frag = (u_show_depth == 1) ? vec4(vec3(1.0 - depth), 1.0) : vec4(rgb, alpha);
 }
