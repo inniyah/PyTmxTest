@@ -95,12 +95,21 @@ def facing_index(dx: float, dz: float, previous: int, directions: int = 4,
 
 @dataclass
 class SpriteSheet:
-    """Hoja de 4 × 4 frames: filas abajo, izquierda, derecha, arriba; columna 0 = quieto."""
+    """Hoja de frames. La actual (4 × 4): filas abajo, izquierda, derecha, arriba; en cada fila un
+    ciclo de andar de cuatro frames: de pie, paso, de pie, el otro paso."""
     texture: int
     width: int
     height: int
     cols: int = 4
     rows: int = 4
+    idle_col: int = 0
+    walk_cycle: tuple = (1, 2, 3, 0)      # empieza por un paso, para que se note enseguida
+
+    def walk_col(self, walk_time: float, fps: float) -> int:
+        """Columna del ciclo de andar tras ``walk_time`` segundos andando (o la de quieto)."""
+        if walk_time <= 0:
+            return self.idle_col
+        return self.walk_cycle[int(walk_time * fps) % len(self.walk_cycle)]
 
     @classmethod
     def load(cls, path):

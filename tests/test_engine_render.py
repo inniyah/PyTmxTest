@@ -153,3 +153,11 @@ def test_facing_is_stable_along_a_diagonal_and_follows_new_input():
     assert facing_index(1, -1, 0, directions=8) == 7        # 8 direcciones: 45° ya es el noreste
     assert facing_index(1, -0.6, 0, directions=8) == 0      # 31°: dentro del margen del este, se mantiene
     assert facing_index(0.2, -1, 0, directions=8) == 6      # casi norte: cambia
+
+
+def test_walk_cycle_follows_the_sheet_order():
+    from engine.render.sprites import SpriteSheet
+    sheet = SpriteSheet(texture=0, width=320, height=420)
+    seq = [sheet.walk_col(t / 8 + 1e-6, 8.0) for t in range(9)]
+    assert sheet.walk_col(0.0, 8.0) == 0                        # quieto: de pie
+    assert seq[:8] == [1, 2, 3, 0, 1, 2, 3, 0]                  # paso, de pie, otro paso, de pie…

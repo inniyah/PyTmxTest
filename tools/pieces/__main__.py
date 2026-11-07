@@ -7,6 +7,7 @@ from pathlib import Path
 from .build import build_gallery, build_tileset
 from .catalog import build_catalog
 from .course import build_course
+from .levels import build_levels
 
 
 def main(argv=None):
@@ -17,6 +18,8 @@ def main(argv=None):
                         help="mapa galería a generar")
     parser.add_argument("--course", type=Path, default=Path("maps/course/course.tmx"),
                         help="mapa de recorrido a generar")
+    parser.add_argument("--levels", type=Path, default=Path("maps/levels/levels.tmx"),
+                        help="mapa de dos niveles a generar")
     args = parser.parse_args(argv)
 
     t0 = time.perf_counter()
@@ -24,7 +27,8 @@ def main(argv=None):
     tsx = build_tileset(args.out, pieces=pieces)
     build_gallery(args.gallery, tsx, pieces=pieces)
     build_course(args.course, tsx, pieces=pieces)
-    print(f"{len(pieces)} piezas -> {args.out}/, {args.gallery} y {args.course} "
+    build_levels(args.levels, tsx, pieces=pieces)
+    print(f"{len(pieces)} piezas -> {args.out}/, {args.gallery}, {args.course} y {args.levels} "
           f"({time.perf_counter() - t0:.1f} s)")
 
 

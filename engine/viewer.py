@@ -5,7 +5,8 @@
 
 Controles: WASD/flechas: andar (sin personaje, mover la vista) · Espacio: saltar ·
 arrastrar con el ratón: mover la vista (deja de seguir al personaje; F vuelve a seguirlo) ·
-rueda o +/-: zoom · PgUp/PgDn: planta más alta que se dibuja · T: tinte por altura ·
+rueda o +/-: zoom · PgUp/PgDn: planta más alta que se dibuja · C: cómo ocultar lo que hay encima del personaje
+(círculo, planta entera o nada) · T: tinte por altura ·
 P: profundidad por píxel · Inicio: centrar · ESC: salir.
 """
 
@@ -30,12 +31,14 @@ KEY_ZOOM = 1.25
 PHYSICS_HZ = 60
 FOLLOW_RATE = 8.0            # 1/s: lo deprisa que la cámara alcanza al personaje
 PLAYER_SHEET = Path(__file__).resolve().parent.parent / "assets" / "people" / "guy.png"
+CUT_MODES = ("círculo", "planta", "no")         # cómo se oculta lo que hay encima del personaje
+CUT_RADIUS_CELLS = 2.5
 WALK_FPS = 8.0
 
 
 class Viewer:
     def __init__(self, world_path, width=1280, height=720, visible=True, player=True,
-                 spawn=None, vsync=True):
+                 spawn=None, vsync=True, spawn_level=None):
         if not glfw.init():
             raise RuntimeError("No se pudo iniciar GLFW")
         glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
@@ -61,9 +64,10 @@ class Viewer:
         self.physics = WalkerPhysics(self.view)
         self.sprites = SpriteRenderer(self.renderer.geo)
         self.sheet = SpriteSheet.load(PLAYER_SHEET) if player else None
-        self.player = self._spawn(spawn) if player else None
+        self.player = self._spawn(spawn, spawn_level) if player else None
         self.follow = player
         self.facing, self.anim_time, self.accumulator = 1, 0.0, 0.0     # mirando al sur
+        self.cut_mode = 0
         if self.player is not None:
             self._center_on_player(1.0)
 
@@ -75,11 +79,12 @@ class Viewer:
         glfw.set_window_size_callback(self.window, self._on_resize)
         self.world_path = Path(world_path)
 
-    def _spawn(self, spawn):
+    def _spawn(self, spawn, level=None):
+        """Aparece sobre la superficie más alta de la columna, o de la planta ``level`` si se da."""
         v, cw = self.view, self.renderer.geo.cell_w
         cx, cy = spawn if spawn else (v.x0 + v.width / 2, v.y0 + v.depth / 2)
         x, z = cx * cw, cy * cw
-        top = (v.level_max + 1.5) * self.renderer.geo.cell_h
+        top = ((v.level_max if level is None else level) + 0.99) * self.renderer.geo.cell_h
         y = float(self.physics.support(x, z, top, search=v.level_max - v.level_min + 3)[0])
         w = Walkers.create([[x, max(y, v.level_min * self.renderer.geo.cell_h), z]])
         w.grounded[:] = True
@@ -112,6 +117,8 @@ class Viewer:
                 r.show_depth = not r.show_depth
             elif key == glfw.KEY_T:
                 r.height_tint = not r.height_tint
+            elif key == glfw.KEY_C:
+                self.cut_mode = (self.cut_mode + 1) % len(CUT_MODES)
             elif key == glfw.KEY_F and self.player is not None:
                 self.follow = True
             elif key == glfw.KEY_SPACE and self.player is not None:
@@ -180,14 +187,41 @@ class Viewer:
 
     # --- Bucle ---
 
+    def covered(self) -> bool:
+        """¿Hay algo por encima de la planta del personaje en su celda o en las de alrededor?"""
+        from engine.world import cell as C
+        g = self.renderer.geo
+        X, Y, Z = self.player.pos[0]
+        level = int(np.floor((Y + 0.05) / g.cell_h))
+        cx, cy = int(np.floor(X / g.cell_w)), int(np.floor(Z / g.cell_w))
+        xs, ys = np.meshgrid(np.arange(cx - 1, cx + 2), np.arange(cy - 1, cy + 2))
+        for above in (level + 1, level + 2):
+            cells = self.view.cells(xs, ys, above)
+            if ((cells & C.GEOMETRY_MASK) != 0).any() and above <= self.view.level_max:
+                return True
+        return False
+
+    def update_cut(self):
+        """Ocultar lo que hay encima del personaje según el modo (tecla C)."""
+        r = self.renderer
+        mode = CUT_MODES[self.cut_mode]
+        if self.player is None or mode == "no" or not self.covered():
+            r.cut_level = None
+            return
+        g = r.geo
+        r.cut_level = int(np.floor((self.player.pos[0, 1] + 0.05) / g.cell_h))
+        r.cut_center = self._player_screen()
+        r.cut_radius = CUT_RADIUS_CELLS * g.tile_w if mode == "círculo" else -1.0
+
     def frame(self):
         r = self.renderer
+        self.update_cut()
         r.draw(self.camera, glfw.get_framebuffer_size(self.window))
         if self.player is not None:
             pos = self.player.pos[0]
             level = int(np.floor(pos[1] / r.geo.cell_h + 1e-6))
             if level <= r.max_level:
-                col = 1 + int(self.anim_time * WALK_FPS) % 3 if self.anim_time > 0 else 0
+                col = self.sheet.walk_col(self.anim_time, WALK_FPS)
                 self.sprites.draw(self.sheet, [(tuple(pos), float(self.player.support[0]),
                                                 float(self.player.height[0]), float(self.player.radius[0]),
                                                 ROWS_4[self.facing], col)],
@@ -222,7 +256,8 @@ class Viewer:
                 glfw.set_window_title(self.window,
                     f"{self.world_path.name} · {frames / max(now - title_at, 1e-6):.0f} fps · "
                     f"zoom {self.camera.zoom:.2f} · chunks {len(r.meshes)} · draw calls {r.draw_calls} · "
-                    f"planta máx {r.max_level}{extra}{' · TINTE' if r.height_tint else ''}"
+                    f"planta máx {r.max_level}{extra} · ocultar encima: {CUT_MODES[self.cut_mode]}"
+                    f"{' (activo)' if r.cut_level is not None else ''}{' · TINTE' if r.height_tint else ''}"
                     f"{' · PROFUNDIDAD' if r.show_depth else ''}")
                 title_at, frames = now, 0
 
@@ -244,14 +279,18 @@ def main(argv=None) -> int:
     parser.add_argument("--screenshot", type=Path, help="dibujar, guardar la captura y salir")
     parser.add_argument("--no-player", action="store_true", help="sin personaje: WASD mueve la vista")
     parser.add_argument("--spawn", type=float, nargs=2, metavar=("X", "Y"), help="celda de aparición")
+    parser.add_argument("--spawn-level", type=int, help="planta de aparición (por defecto, la más alta)")
     parser.add_argument("--no-vsync", action="store_true", help="sin sincronía vertical (medir fps reales)")
     parser.add_argument("--tint", action="store_true", help="empezar con el tinte por altura")
+    parser.add_argument("--cut", choices=CUT_MODES, default=CUT_MODES[0],
+                        help="cómo ocultar lo que hay encima del personaje")
     parser.add_argument("--walk", type=float, nargs=3, action="append", metavar=("DX", "DZ", "S"),
                         help="con --screenshot: andar en esa dirección S segundos antes de capturar")
     args = parser.parse_args(argv)
 
     viewer = Viewer(args.world, *args.size, visible=args.screenshot is None,
-                    player=not args.no_player, spawn=args.spawn, vsync=not args.no_vsync)
+                    player=not args.no_player, spawn=args.spawn, vsync=not args.no_vsync,
+                    spawn_level=args.spawn_level)
     try:
         if args.zoom:
             viewer.camera.zoom = args.zoom
@@ -262,6 +301,7 @@ def main(argv=None) -> int:
             viewer.home()
         viewer.renderer.show_depth = args.depth
         viewer.renderer.height_tint = args.tint
+        viewer.cut_mode = CUT_MODES.index(args.cut)
         if args.screenshot:
             for dx, dz, secs in args.walk or []:
                 for _ in range(int(secs * PHYSICS_HZ)):

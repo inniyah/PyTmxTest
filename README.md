@@ -197,6 +197,7 @@ python -m engine.viewer maps/course/course.cworld --no-player --no-vsync
 | Arrastrar con el ratón | Mover la vista (deja de seguir al personaje; F vuelve a seguirlo) |
 | Rueda, `+` / `-` | Zoom |
 | PgUp / PgDn | Planta más alta que se dibuja |
+| C | Cómo ocultar lo que hay encima del personaje: círculo, planta entera o nada |
 | T | Tinte por altura (más claro cuanto más alto) |
 | P | Profundidad por píxel en escala de grises |
 | Inicio | Centrar el mapa |
@@ -216,7 +217,13 @@ techos, también su contorno. Paso fijo de 60 Hz, con las consultas al mundo agr
 todos los cilindros a la vez (≈ 0.45 ms por paso con uno, ≈ 2.3 ms con cien). Un test de estrés
 (200 personajes andando y saltando al azar) comprueba que nadie se mete en el suelo.
 
-Opciones útiles: `--spawn X Y` (celda de aparición), `--tint`, `--screenshot captura.png`
+**Ocultar lo que hay encima.** Cuando el personaje tiene algo por encima de su planta en su
+celda o en las de alrededor (un forjado, un puente), se deja de dibujar lo que está por encima
+de su planta: en un círculo a su alrededor o en todo el mapa (tecla C). La detección es
+automática; no hay que marcar nada en Tiled.
+
+Opciones útiles: `--spawn X Y` (celda de aparición) y `--spawn-level N` (su planta),
+`--cut círculo|planta|no`, `--tint`, `--screenshot captura.png`
 (dibujar, guardar y salir) y, con ella, `--walk DX DZ SEGUNDOS` para andar antes de capturar.
 
 ## Piezas de prueba (formato de celda de 32 bits)
@@ -237,6 +244,7 @@ python -m tools.pieces          # ~2 s
 | `assets/pieces/pieces.tsx` | Tileset de Tiled: cada tile lleva su clase y su parte de celda como propiedades |
 | `maps/gallery/gallery.tmx` | Galería con cada pieza en su celda y su nombre debajo |
 | `maps/course/course.tmx` | Recorrido en tres plantas: plataforma con escalera, habitación, muro diagonal, túnel, terraza con rampa ancha y torre |
+| `maps/levels/levels.tmx` | Dos niveles con aire debajo: puente, edificio de dos plantas con escalera interior y agujero, balcón |
 
 Proyección (como los mapas existentes): celdas de 2 × 2 × 3 m, tiles de 128 px de ancho,
 filas de 92 px y 133 px por planta. Las propiedades de cada tile (`walls`, `fill`, `floor`,

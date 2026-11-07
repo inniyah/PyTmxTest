@@ -133,6 +133,11 @@ class WorldRenderer:
         self.max_level = view.level_max          # plantas por encima de esta no se dibujan
         self.show_depth = False
         self.height_tint = False
+        # Ocultar lo que hay encima: celdas por encima de cut_level, en todo el mapa
+        # (cut_radius < 0) o en un círculo de cut_radius px alrededor de cut_center
+        self.cut_level = None
+        self.cut_center = (0.0, 0.0)
+        self.cut_radius = -1.0
         self.draw_calls = 0
 
         self.program = compileProgram(compileShader(TILE_VERTEX, GL_VERTEX_SHADER),
@@ -140,7 +145,7 @@ class WorldRenderer:
         self.u = {name: glGetUniformLocation(self.program, name) for name in (
             "u_projection", "u_color", "u_position", "u_pos_min", "u_pos_max", "u_scale",
             "u_closeness_range", "u_max_y", "u_show_depth", "u_level_bias", "u_cell_h",
-            "u_height_tint")}
+            "u_height_tint", "u_cut_y", "u_cut_center", "u_cut_radius")}
 
     # --- Qué chunks se ven ---
 
@@ -198,6 +203,10 @@ class WorldRenderer:
         glUniform1f(self.u["u_level_bias"], LEVEL_BIAS)
         glUniform1f(self.u["u_cell_h"], g.cell_h)
         glUniform1i(self.u["u_height_tint"], int(self.height_tint))
+        cut_y = 1e9 if self.cut_level is None else (self.cut_level + 0.5) * g.cell_h
+        glUniform1f(self.u["u_cut_y"], cut_y)
+        glUniform2f(self.u["u_cut_center"], *self.cut_center)
+        glUniform1f(self.u["u_cut_radius"], self.cut_radius)
 
         self.draw_calls = 0
         for key in visible:                               # de norte a sur: mejor mezcla de transparencias

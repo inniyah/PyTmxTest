@@ -36,12 +36,14 @@ out vec2 v_uv;
 out vec3 v_origin;
 out float v_alpha;
 out float v_screen_y;             // posición en pantalla del píxel, en píxeles de mundo
+out vec2 v_pos;
 
 void main() {
     v_uv = a_uv;
     v_origin = a_origin;
     v_alpha = a_alpha;
     v_screen_y = a_pos.y;
+    v_pos = a_pos;
     gl_Position = u_projection * vec4(a_pos, 0.0, 1.0);
 }
 """
@@ -52,6 +54,7 @@ in vec2 v_uv;
 in vec3 v_origin;
 in float v_alpha;
 in float v_screen_y;
+in vec2 v_pos;
 
 uniform sampler2D u_color;
 uniform sampler2D u_position;     // RGBA16: posición dentro de la celda, normalizada
@@ -64,6 +67,9 @@ uniform float u_cell_h;
 uniform float u_max_y;            // corte de plantas: no se dibuja por encima (metros)
 uniform int u_show_depth;
 uniform int u_height_tint;        // 1: aclarar con la altura para leer las plantas
+uniform float u_cut_y;            // ocultar las celdas cuyo origen esté por encima (metros)...
+uniform vec2 u_cut_center;        // ...dentro de este círculo (píxeles de mundo)...
+uniform float u_cut_radius;       // ...de este radio; negativo = en todo el mapa
 
 out vec4 frag;
 
@@ -72,6 +78,8 @@ void main() {
     float alpha = color.a * v_alpha;
     if (alpha < 0.01) discard;
     if (v_origin.y > u_max_y) discard;
+    if (v_origin.y > u_cut_y && (u_cut_radius < 0.0 || distance(v_pos, u_cut_center) < u_cut_radius))
+        discard;
     vec3 local = u_pos_min + texture(u_position, v_uv).rgb * (u_pos_max - u_pos_min);
     float height = v_origin.y + local.y;
     float sz = u_scale.x, sy = u_scale.y;
