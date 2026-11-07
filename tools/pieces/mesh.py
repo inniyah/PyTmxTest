@@ -51,6 +51,21 @@ MATERIALS = {
 }
 
 
+def newell_normal(points: np.ndarray) -> np.ndarray:
+    """Normal (sin normalizar) de un polígono plano con el método de Newell: usa todos los
+    vértices, así que no falla aunque tres consecutivos estén alineados."""
+    p, q = points, np.roll(points, -1, axis=0)
+    return np.array([np.sum((p[:, 1] - q[:, 1]) * (p[:, 2] + q[:, 2])),
+                     np.sum((p[:, 2] - q[:, 2]) * (p[:, 0] + q[:, 0])),
+                     np.sum((p[:, 0] - q[:, 0]) * (p[:, 1] + q[:, 1]))])
+
+
+def _dedupe(points: np.ndarray, eps: float = 1e-9) -> np.ndarray:
+    """Quita vértices repetidos consecutivos (también el último con el primero)."""
+    keep = [p for i, p in enumerate(points) if np.linalg.norm(p - points[i - 1]) > eps] if len(points) else []
+    return np.array(keep, float).reshape(-1, 3)
+
+
 @dataclass
 class Face:
     points: np.ndarray        # (n, 3) en metros, en orden con la normal hacia fuera
@@ -100,13 +115,12 @@ def _prism(region: Sequence[Tuple[float, float]], bottom: Height, top: Height,
         return faces                 # una lámina: solo la cara de arriba
     faces.append(Face(np.array([p(u, v, bottom(u, v)) for u, v in reversed(ring)], float), material))
     for (u0, v0), (u1, v1) in zip(ring, ring[1:] + ring[:1]):
-        quad = [p(u0, v0, bottom(u0, v0)), p(u1, v1, bottom(u1, v1)),
-                p(u1, v1, top(u1, v1)), p(u0, v0, top(u0, v0))]
-        quad = np.array(quad, float)
-        if np.linalg.norm(np.cross(quad[1] - quad[0], quad[3] - quad[0])) < 1e-9 and \
-           np.linalg.norm(np.cross(quad[2] - quad[1], quad[2] - quad[3])) < 1e-9:
-            continue                 # lado degenerado (altura cero en ese borde)
-        faces.append(Face(quad, material))
+        side = _dedupe(np.array([p(u0, v0, bottom(u0, v0)), p(u1, v1, bottom(u1, v1)),
+                                 p(u1, v1, top(u1, v1)), p(u0, v0, top(u0, v0))], float))
+        # Si un extremo del lado tiene altura cero, el lado es un triángulo; si los dos, no hay lado
+        if len(side) < 3 or np.linalg.norm(newell_normal(side)) < 1e-9:
+            continue
+        faces.append(Face(side, material))
     return faces
 
 
@@ -117,7 +131,7 @@ def _orient_outwards(faces: List[Face]) -> List[Face]:
     center = np.concatenate([f.points for f in faces]).mean(axis=0)
     out = []
     for f in faces:
-        n = np.cross(f.points[1] - f.points[0], f.points[2] - f.points[0])
+        n = newell_normal(f.points)
         if np.dot(n, f.points.mean(axis=0) - center) < 0:
             f = Face(f.points[::-1].copy(), f.material)
         out.append(f)

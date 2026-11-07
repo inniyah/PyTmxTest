@@ -5,6 +5,9 @@ pies). Celda: (floor(X / ancho), floor(Z / ancho), floor(Y / alto de planta)).
 
 Por paso de física (paso fijo):
   1. Velocidad horizontal hacia la objetivo con agarre (suelo o aire); gravedad; salto.
+     Contactos entre cilindros: los que se solapan (en planta y en altura) se apartan, cada uno
+     en proporción a la masa del otro, y pierden la velocidad con la que se acercaban. El
+     apartamiento se suma al movimiento antes de las paredes: las paredes siempre ganan.
   2. Avance horizontal y separación de las paredes: el cilindro se empuja fuera del segmento
      con más penetración (paredes de borde, diagonales finas, lados de lo macizo) y se quita
      la componente de la velocidad que entra en él, así que resbala en cualquier ángulo.
@@ -48,6 +51,7 @@ def _fill_edges():
 
 FILL_EDGES = _fill_edges()
 SEGMENTS_PER_CELL = 6          # 4 del relleno + pared norte + pared oeste
+CONTACT_PASSES = 2             # pasadas de separación entre cilindros por paso
 
 # Puntos del cilindro en los que se comprueba si choca con suelos y techos: el centro y 8 en
 # el borde, a 0.98 r (tocar un borde exactamente es válido: 5 mm de tolerancia con r = 25 cm).
@@ -83,10 +87,12 @@ class Walkers:
     wish: np.ndarray = None                          # (n, 2) dirección deseada en X, Z (-1..1)
     jump: np.ndarray = None                          # (n,) bool, petición de salto
     support: np.ndarray = None                       # (n,) altura del suelo bajo los pies
+    mass: np.ndarray = None                          # (n,) kg; inf = inamovible
 
     def __post_init__(self):
         n = len(self.pos)
         self.pos = np.asarray(self.pos, float)
+        self.mass = np.full(n, 70.0) if self.mass is None else np.asarray(self.mass, float)
         self.vel = np.zeros((n, 3)) if self.vel is None else self.vel
         self.grounded = np.zeros(n, bool) if self.grounded is None else self.grounded
         self.wish = np.zeros((n, 2)) if self.wish is None else self.wish
@@ -286,6 +292,83 @@ class WalkerPhysics:
         z[stuck[found]] = cz[pick[found]]
         return x, z
 
+    # --- Contactos entre cilindros ------------------------------------------------------
+
+    @staticmethod
+    def _neighbour_pairs(x, z, cell):
+        """Pares (i, j), i < j, en casillas vecinas de una rejilla de lado ``cell``. Vectorizado."""
+        n = len(x)
+        if n < 2:
+            return np.zeros(0, np.int64), np.zeros(0, np.int64)
+        cx = np.floor(x / cell).astype(np.int64)
+        cz = np.floor(z / cell).astype(np.int64)
+        big = np.int64(1 << 31)
+        key = cx * big + cz
+        order = np.argsort(key, kind="stable")
+        skey = key[order]
+        ii, jj = [], []
+        for dx in (-1, 0, 1):
+            for dz in (-1, 0, 1):
+                target = (cx + dx) * big + (cz + dz)
+                lo = np.searchsorted(skey, target, "left")
+                hi = np.searchsorted(skey, target, "right")
+                counts = hi - lo
+                total = int(counts.sum())
+                if total == 0:
+                    continue
+                i = np.repeat(np.arange(n), counts)
+                starts = np.repeat(lo - (np.cumsum(counts) - counts), counts)
+                j = order[starts + np.arange(total)]
+                keep = i < j
+                ii.append(i[keep])
+                jj.append(j[keep])
+        if not ii:
+            return np.zeros(0, np.int64), np.zeros(0, np.int64)
+        return np.concatenate(ii), np.concatenate(jj)
+
+    def contacts(self, w: Walkers, x=None, z=None, relax: float = 1.0):
+        """Apartamiento (n, 2) en X, Z de los cilindros que se solapan en (x, z) (por defecto,
+        donde están); ajusta ``w.vel``."""
+        n = len(w.pos)
+        sep = np.zeros((n, 2))
+        if n < 2:
+            return sep
+        y = w.pos[:, 1]
+        x = w.pos[:, 0] if x is None else x
+        z = w.pos[:, 2] if z is None else z
+        i, j = self._neighbour_pairs(x, z, 2.0 * float(w.radius.max()) + 1e-6)
+        if i.size == 0:
+            return sep
+        dx, dz = x[i] - x[j], z[i] - z[j]
+        dist = np.sqrt(dx * dx + dz * dz)
+        overlap = w.radius[i] + w.radius[j] - dist
+        vertical = (y[i] < y[j] + w.height[j]) & (y[j] < y[i] + w.height[i])
+        hit = (overlap > 0) & vertical
+        if not hit.any():
+            return sep
+        i, j, dx, dz, dist, overlap = i[hit], j[hit], dx[hit], dz[hit], dist[hit], overlap[hit]
+        same = dist < 1e-9                                   # encima uno de otro: separar en X
+        nx = np.where(same, 1.0, dx / np.maximum(dist, 1e-9))
+        nz = np.where(same, 0.0, dz / np.maximum(dist, 1e-9))
+        inv_i = np.where(np.isfinite(w.mass[i]), 1.0 / w.mass[i], 0.0)
+        inv_j = np.where(np.isfinite(w.mass[j]), 1.0 / w.mass[j], 0.0)
+        total = inv_i + inv_j
+        share_i = np.where(total > 0, inv_i / np.maximum(total, 1e-12), 0.0)
+        share_j = np.where(total > 0, inv_j / np.maximum(total, 1e-12), 0.0)
+        push = overlap * relax
+        np.add.at(sep, i, np.stack([nx * push * share_i, nz * push * share_i], axis=1))
+        np.add.at(sep, j, np.stack([-nx * push * share_j, -nz * push * share_j], axis=1))
+        # Velocidad: quitar la parte con la que se acercan, repartida igual que el empuje
+        rel = (w.vel[i, 0] - w.vel[j, 0]) * nx + (w.vel[i, 2] - w.vel[j, 2]) * nz
+        closing = np.minimum(rel, 0.0)
+        dv_i = -closing * share_i
+        dv_j = closing * share_j
+        np.add.at(w.vel, (i, 0), dv_i * nx)
+        np.add.at(w.vel, (i, 2), dv_i * nz)
+        np.add.at(w.vel, (j, 0), dv_j * nx)
+        np.add.at(w.vel, (j, 2), dv_j * nz)
+        return sep
+
     # --- Paso de física ---------------------------------------------------------------
 
     def step(self, w: Walkers, dt: float):
@@ -307,7 +390,13 @@ class WalkerPhysics:
         # Lo que no supera los pies + un escalón no es pared, en el suelo y en el aire (en el aire
         # funciona como ayuda de borde: rozar un saliente bajo te sube a él)
         margin = w.step.copy()
-        x, z = self._push_out(w, x0 + w.vel[:, 0] * dt, z0 + w.vel[:, 2] * dt, w.vel, margin)
+        # Contactos sobre las posiciones tras avanzar (donde de verdad estarían), en dos pasadas
+        # para las aglomeraciones; después las paredes, que siempre ganan
+        x, z = x0 + w.vel[:, 0] * dt, z0 + w.vel[:, 2] * dt
+        for _ in range(CONTACT_PASSES):
+            sep = self.contacts(w, x, z)
+            x, z = x + sep[:, 0], z + sep[:, 1]
+        x, z = self._push_out(w, x, z, w.vel, margin)
 
         # 3. Validez del movimiento en el centro y en el borde del cilindro. No vale si en algún
         #    punto hay un suelo cuyo volumen (macizo de la base de su celda a su superficie) se

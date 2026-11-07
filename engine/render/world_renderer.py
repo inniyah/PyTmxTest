@@ -19,7 +19,7 @@ from OpenGL.GL import (
     GL_TEXTURE_MAG_FILTER,
     GL_TEXTURE_MIN_FILTER, GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T, GL_TRIANGLES,
     GL_UNSIGNED_BYTE, GL_UNSIGNED_INT, GL_UNSIGNED_SHORT, GL_VERTEX_SHADER, glActiveTexture,
-    glBindBuffer, glBindTexture, glBindVertexArray, glBlendFunc, glBufferData, glClear,
+    glBindBuffer, glBindTexture, glBindVertexArray, glBufferData, glClear,
     glClearColor, glClearDepth, glDeleteBuffers, glDeleteTextures, glDeleteVertexArrays,
     glDepthFunc, glDrawElements, glEnable, glEnableVertexAttribArray, glGenBuffers,
     glGenTextures, glGenVertexArrays, glGetUniformLocation, glTexImage2D, glTexParameteri,
@@ -27,6 +27,7 @@ from OpenGL.GL import (
     glUniformMatrix4fv, glUseProgram,
     glVertexAttribPointer, glViewport,
 )
+from OpenGL.GL import GL_ONE, glBlendFuncSeparate
 from OpenGL.GL.shaders import compileProgram, compileShader
 from PIL import Image
 
@@ -225,7 +226,9 @@ class WorldRenderer:
         glEnable(GL_DEPTH_TEST)
         glDepthFunc(GL_LEQUAL)            # en superficies coincidentes gana la que se dibuja después
         glEnable(GL_BLEND)
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        # El alfa del framebuffer se queda opaco (las sombras y transparencias solo oscurecen el
+        # color): necesario para capturas y para dibujar en texturas intermedias
+        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
 
         g = self.geo
         glUseProgram(self.program)

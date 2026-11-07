@@ -140,11 +140,15 @@ def test_covered_detection(world, viewer_factory):
     v = viewer_factory(world, 320, 200, visible=False, spawn=(17.5, 6.5), spawn_level=0)
     try:
         assert v.covered()                                  # planta baja del edificio
-        v.player.pos[0] = [17.5 * CW, 3.0, 6.5 * CW]       # planta 1: nada encima
+        v.player.pos = [17.5 * CW, 3.0, 6.5 * CW]          # planta 1: nada encima
         assert not v.covered()
-        v.player.pos[0] = [3.0 * CW, 0.0, 14.5 * CW]       # calle abierta
+        v.player.pos = [3.0 * CW, 0.0, 14.5 * CW]          # calle abierta
         assert not v.covered()
-        v.player.pos[0] = [6.5 * CW, 0.0, 8.5 * CW]        # bajo el puente
+        v.player.pos = [6.5 * CW, 0.0, 8.5 * CW]           # bajo el puente
+        assert v.covered()
+        v.player.pos = [13.5 * CW, 0.0, 6.5 * CW]          # en la calle, pegado al edificio
+        assert not v.covered()
+        v.player.pos = [16.5 * CW, 0.0, 5.5 * CW]          # justo bajo el agujero del forjado
         assert v.covered()
     finally:
         v.close()
@@ -161,5 +165,29 @@ def test_player_inside_the_building(world, viewer_factory, tmp_path, mode, visib
         v.screenshot(tmp_path / "inside.png")
         skin = _skin_pixels(tmp_path / "inside.png")
         assert (skin > 200) if visible else (skin < 20), f"{skin} píxeles de piel con modo {mode}"
+    finally:
+        v.close()
+
+
+def test_npc_upstairs_is_hidden_in_the_cut_window(world, viewer_factory, tmp_path):
+    """Con el jugador en la planta baja y el círculo activo, un NPC de la planta 1 justo encima
+    no se dibuja en la ventana (tapaba lo que se quiere ver)."""
+    from PIL import Image
+    v = viewer_factory(world, 480, 320, visible=False, spawn=(17.5, 6.5), spawn_level=0)
+    try:
+        v.renderer.lighting.enabled = False
+        npc = v.table.spawn("guardia", [17.5 * CW, 3.0, 7.5 * CW], brain=0)
+        v.table.tint[v.table.row(npc)] = (0.0, 1.0, 0.0)                    # verde puro: fácil de ver
+        v._center_on_player(1.0)
+
+        def green_pixels():
+            v.screenshot(tmp_path / "g.png")
+            img = np.asarray(Image.open(tmp_path / "g.png").convert("RGB")).astype(int)
+            return int(((img[..., 1] > 150) & (img[..., 0] < 60) & (img[..., 2] < 60)).sum())
+        from engine.viewer import CUT_MODES
+        v.cut_mode = CUT_MODES.index("no")
+        visible_without_cut = green_pixels()
+        v.cut_mode = CUT_MODES.index("círculo")
+        assert visible_without_cut > 100 and green_pixels() == 0
     finally:
         v.close()

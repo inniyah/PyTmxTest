@@ -116,3 +116,18 @@ def test_gallery_loads_in_the_engine_world(built):
     assert w.level_height == PROJ.level_h and w.H == 1
     assert {l.role.name for l in w.layers} == {"FLOOR", "OBJECT", "OVERHEAD"}
     assert (w.tiles[0, :, :, 0] != 0).all()                       # todo el suelo cubierto
+
+
+@pytest.mark.parametrize("piece", CATALOG, ids=lambda p: p.name)
+def test_every_face_has_a_valid_outward_normal(piece):
+    """Una cara con vértices alineados al principio daba normal indefinida y no se dibujaba."""
+    from tools.pieces.mesh import newell_normal
+    mesh = mesh_for(piece.spec)
+    center = np.concatenate([f.points for f in mesh.faces]).mean(axis=0)
+    for f in mesh.faces:
+        assert len(f.points) >= 3
+        n = newell_normal(f.points)
+        assert np.isfinite(n).all() and np.linalg.norm(n) > 1e-9
+        single_prism = len(piece.spec.walls) <= 1                 # las esquinas son dos prismas
+        if len(mesh.faces) > 1 and single_prism:                 # hacia fuera del prisma
+            assert np.dot(n, f.points.mean(axis=0) - center) > 0

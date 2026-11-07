@@ -1,6 +1,6 @@
 """TMX Explorer: visor OpenGL de mapas Tiled con niveles de altura y personajes."""
 
-__version__ = "2.9.0"
+__version__ = "2.10.1"
 
 # Los módulos que dependen de OpenGL/GLFW se importan bajo demanda para que
 # ``tmx_explorer.map`` o ``tmx_explorer.entities`` se puedan usar (y testear) sin GPU.

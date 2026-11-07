@@ -119,7 +119,8 @@ engine/                     Motor nuevo
   world/                    Celda de 32 bits, CellSpec, chunks, WorldStore (SQLite), WorldView
   compiler/                 Tiled (.tmx) -> mundo compilado (.cworld)
   render/                   Dibujo del mundo y de los personajes (OpenGL 3.3, profundidad por píxel)
-  physics/                  Física de andar para cilindros, vectorizada
+  physics/                  Física de andar para cilindros, vectorizada, con contactos entre ellos
+  entities/                 Tipos de personaje, tabla con identificadores, comportamiento de paseo
   viewer.py                 Visor: python -m engine.viewer MUNDO.cworld
   png16.py                  PNG de 16 bits por canal (mapas de posición)
 tools/pieces/               Catálogo de piezas, .obj, render oblicuo, tileset y galería
@@ -188,6 +189,7 @@ world.visual(xs, ys, zs)     # sus 4 huecos visuales
 python -m engine.compiler maps/course/course.tmx
 python -m engine.viewer maps/course/course.cworld          # con personaje
 python -m engine.viewer maps/course/course.cworld --no-player --no-vsync
+python -m engine.viewer maps/levels/levels.cworld --npcs 60 --night       # con gente paseando
 ```
 
 | Control | Acción |
@@ -227,6 +229,16 @@ como objetos punto de clase `light` en una capa de objetos dentro de cada planta
 propiedades opcionales `color`, `radius` (m), `intensity` y `height` (m sobre el suelo de la
 planta); el compilador las guarda en la tabla `lights` del mundo. De día las luces puntuales
 se notan poco (25 %). Aún no hay sombras: la luz atraviesa las paredes.
+
+**Personajes** (`engine/entities`). Los tipos se definen en `assets/actors/types.json` (radio,
+altura, masa, velocidades, hoja de sprites, tinte; lo que falte se toma de `defecto`). Todos
+los personajes, jugador incluido, viven en una tabla de arrays con identificadores estables
+(fila + generación: un identificador de un personaje borrado nunca apunta a otro). Los
+cilindros que se solapan se apartan en proporción a la masa del otro, antes de resolver las
+paredes (las paredes siempre ganan). Los NPC pasean (`--npcs N`): alternan andar y pararse,
+miran delante para no caerse por un borde ni chocar con algo alto, y giran si se atascan.
+Todos se dibujan en dos llamadas (sombras y sprites). Coste por paso de 60 Hz, con física,
+contactos y comportamiento: ≈ 1.8 ms con 50 personajes, ≈ 3.4 ms con 150.
 
 **Ocultar lo que hay encima.** Cuando el personaje tiene algo por encima de su planta en su
 celda o en las de alrededor (un forjado, un puente), se deja de dibujar lo que está por encima

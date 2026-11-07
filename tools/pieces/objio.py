@@ -6,7 +6,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 
 from . import objparser
-from .mesh import MATERIALS, Mesh
+from .mesh import MATERIALS, Mesh, newell_normal
 
 MTL_NAME = "pieces.mtl"
 
@@ -31,7 +31,7 @@ def write_obj(path: Path, mesh: Mesh, name: str, mtl: str = MTL_NAME):
         return vertices[key]
 
     for face in mesh.faces:
-        n = np.cross(face.points[1] - face.points[0], face.points[2] - face.points[0])
+        n = newell_normal(face.points)
         n = n / (np.linalg.norm(n) or 1.0)
         normals.append(tuple(n))
         ni = len(normals)

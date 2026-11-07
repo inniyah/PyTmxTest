@@ -1,0 +1,12 @@
+{
+  "_comentario": "Tipos de personaje. Los valores que falten se toman de 'defecto'. Distancias en metros, velocidades en m/s, masa en kg; sheet es relativa a assets/; tint multiplica el color del sprite.",
+  "defecto": {
+    "radius": 0.25, "height": 1.7, "step": 0.3, "mass": 70.0,
+    "max_speed": 4.0, "walk_speed": 1.4, "grip_ground": 14.0, "grip_air": 2.0, "jump_speed": 6.5,
+    "sheet": "people/guy.png", "tint": [1.0, 1.0, 1.0]
+  },
+  "persona": {},
+  "niño": {"radius": 0.2, "height": 1.2, "mass": 30.0, "max_speed": 3.5, "walk_speed": 1.3, "tint": [1.0, 0.85, 0.75]},
+  "perro": {"radius": 0.22, "height": 0.6, "mass": 25.0, "max_speed": 5.0, "walk_speed": 2.2, "tint": [0.75, 0.58, 0.42]},
+  "guardia": {"radius": 0.32, "height": 1.95, "mass": 140.0, "max_speed": 3.6, "walk_speed": 1.1, "tint": [0.62, 0.70, 0.95]}
+}

@@ -24,7 +24,7 @@ from typing import List, Tuple
 
 import numpy as np
 
-from .mesh import CellSize
+from .mesh import CellSize, newell_normal
 
 LIGHT = np.array([-0.45, 1.0, 0.65]) / np.linalg.norm([-0.45, 1.0, 0.65])
 AMBIENT = 0.38
@@ -88,7 +88,7 @@ def render(faces: List[Tuple[np.ndarray, Tuple[float, float, float]]], proj: Pro
     gx, gy = np.meshgrid(np.arange(w) + 0.5, h - (np.arange(h) + 0.5))
 
     for fid, (points, kd) in enumerate(faces):
-        n = np.cross(points[1] - points[0], points[2] - points[0])
+        n = newell_normal(points)                      # robusta aunque haya vértices alineados
         if np.linalg.norm(n) < 1e-12:
             continue
         n = n / np.linalg.norm(n)

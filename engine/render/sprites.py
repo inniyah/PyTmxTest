@@ -29,14 +29,23 @@ SPRITE_VERTEX = """
 layout(location = 0) in vec2 a_pos;      // píxeles de mundo
 layout(location = 1) in vec2 a_uv;       // en la hoja (sprite) o en el disco de la sombra (-1..1)
 layout(location = 2) in vec2 a_world;    // (Y, Z) en metros del punto
+layout(location = 3) in vec3 a_tint;
+layout(location = 4) in float a_bias;    // desempate con el suelo de su planta
+layout(location = 5) in float a_level;   // planta de los pies (para ocultar lo de encima)
 uniform mat4 u_projection;
 out vec2 v_uv;
 out vec2 v_world;
-out float v_px;
+out vec2 v_pos;
+out vec3 v_tint;
+out float v_bias;
+out float v_level;
 void main() {
     v_uv = a_uv;
     v_world = a_world;
-    v_px = a_pos.x;
+    v_pos = a_pos;
+    v_tint = a_tint;
+    v_bias = a_bias;
+    v_level = a_level;
     gl_Position = u_projection * vec4(a_pos, 0.0, 1.0);
 }
 """
@@ -45,17 +54,26 @@ SPRITE_FRAGMENT = """
 #version 330 core
 in vec2 v_uv;
 in vec2 v_world;
-in float v_px;
+in vec2 v_pos;
+in vec3 v_tint;
+in float v_bias;
+in float v_level;
 uniform float u_m_per_px;          // metros por píxel de pantalla en X
 uniform sampler2D u_sheet;
 uniform int u_shadow;
 uniform vec2 u_scale;              // (sz, sy)
 uniform vec2 u_closeness_range;
-uniform float u_bias;              // desempate con el suelo de la planta en la que está
 uniform int u_show_depth;
+uniform float u_cut_level;         // ocultar lo que esté por encima de esta planta...
+uniform vec2 u_cut_center;         // ...en este círculo (radio < 0: en todo el mapa)
+uniform float u_cut_radius;
+uniform float u_max_level;
 """ + LIGHTING_GLSL + """
 out vec4 frag;
 void main() {
+    if (v_level > u_max_level + 0.5) discard;
+    if (v_level > u_cut_level + 0.5 && (u_cut_radius < 0.0 || distance(v_pos, u_cut_center) < u_cut_radius))
+        discard;
     vec4 color;
     if (u_shadow == 1) {
         float r = length(v_uv);
@@ -64,21 +82,26 @@ void main() {
     } else {
         color = texture(u_sheet, v_uv);
         if (color.a < 0.01) discard;
+        color.rgb *= v_tint;
     }
-    float closeness = v_world.x * u_scale.x + v_world.y * u_scale.y + u_bias;
+    float closeness = v_world.x * u_scale.x + v_world.y * u_scale.y + v_bias;
     float depth = clamp(1.0 - (closeness - u_closeness_range.x)
                         / (u_closeness_range.y - u_closeness_range.x), 0.0, 1.0);
     gl_FragDepth = depth;
     if (u_lighting == 1 && u_shadow == 0) {
         // El sprite, de cara a la cámara (sin normales): luz "envolvente" para que también le
         // alumbre una luz que esté a un lado
-        vec3 world = vec3(v_px * u_m_per_px, v_world.x, v_world.y);
+        vec3 world = vec3(v_pos.x * u_m_per_px, v_world.x, v_world.y);
         vec3 n = normalize(vec3(0.0, 0.35, 1.0));
         color.rgb = to_srgb(to_linear(color.rgb) * light_at(world, n, 0.6));
     }
     frag = (u_show_depth == 1 && u_shadow == 0) ? vec4(vec3(1.0 - depth), 1.0) : color;
 }
 """
+
+FLOATS = 11          # pos (2), uv (2), mundo Y Z (2), tinte (3), desempate (1), planta (1)
+WALK_FPS = 8.0
+
 
 # Direcciones: índice 0 = este y sentido horario en pantalla (este, sur, oeste, norte con 4;
 # este, sureste, sur… con 8). Cada hoja dice qué fila tiene cada dirección.
@@ -105,6 +128,16 @@ def facing_index(dx: float, dz: float, previous: int, directions: int = 4,
     return int(np.floor(angle / sector + 0.5)) % directions
 
 
+def facing_indices(dx, dz, previous, directions: int = 4, hysteresis_deg: float = HYSTERESIS_DEG):
+    """Versión vectorizada de ``facing_index`` para muchos personajes a la vez."""
+    dx, dz, previous = np.asarray(dx, float), np.asarray(dz, float), np.asarray(previous)
+    sector = 360.0 / directions
+    angle = np.degrees(np.arctan2(dz, dx)) % 360.0
+    off = np.abs((angle - previous * sector + 180.0) % 360.0 - 180.0)
+    keep = (dx * dx + dz * dz < 1e-6) | (off <= sector / 2 + hysteresis_deg)
+    return np.where(keep, previous, np.floor(angle / sector + 0.5).astype(int) % directions)
+
+
 @dataclass
 class SpriteSheet:
     """Hoja de frames. La actual (4 × 4): filas abajo, izquierda, derecha, arriba; en cada fila un
@@ -116,6 +149,12 @@ class SpriteSheet:
     rows: int = 4
     idle_col: int = 0
     walk_cycle: tuple = (1, 2, 3, 0)      # empieza por un paso, para que se note enseguida
+
+    def walk_cols(self, walk_time, fps: float):
+        """Versión vectorizada de ``walk_col``."""
+        walk_time = np.asarray(walk_time, float)
+        cycle = np.asarray(self.walk_cycle)
+        return np.where(walk_time > 0, cycle[(walk_time * fps).astype(int) % len(cycle)], self.idle_col)
 
     def walk_col(self, walk_time: float, fps: float) -> int:
         """Columna del ciclo de andar tras ``walk_time`` segundos andando (o la de quieto)."""
@@ -139,66 +178,92 @@ class SpriteSheet:
 
 
 class SpriteRenderer:
+    """Dibuja todos los personajes (y sus sombras) en una llamada por hoja de sprites."""
+
     def __init__(self, geo):
         self.geo = geo
         self.program = compileProgram(compileShader(SPRITE_VERTEX, GL_VERTEX_SHADER),
                                       compileShader(SPRITE_FRAGMENT, GL_FRAGMENT_SHADER))
         self.u = {k: glGetUniformLocation(self.program, k) for k in (
-            "u_projection", "u_sheet", "u_shadow", "u_scale", "u_closeness_range", "u_bias", "u_show_depth",
-            "u_m_per_px", *LIGHT_UNIFORMS)}
+            "u_projection", "u_sheet", "u_shadow", "u_scale", "u_closeness_range", "u_show_depth",
+            "u_m_per_px", "u_cut_level", "u_cut_center", "u_cut_radius", "u_max_level", *LIGHT_UNIFORMS)}
         self.vao, self.vbo = glGenVertexArrays(1), glGenBuffers(1)
         glBindVertexArray(self.vao)
         glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
-        for loc, off in ((0, 0), (1, 2), (2, 4)):
+        for loc, size, off in ((0, 2, 0), (1, 2, 2), (2, 2, 4), (3, 3, 6), (4, 1, 9), (5, 1, 10)):
             glEnableVertexAttribArray(loc)
-            glVertexAttribPointer(loc, 2, GL_FLOAT, GL_FALSE, 24, ctypes.c_void_p(off * 4))
+            glVertexAttribPointer(loc, size, GL_FLOAT, GL_FALSE, FLOATS * 4, ctypes.c_void_p(off * 4))
         glBindVertexArray(0)
+        self.draw_calls = 0
 
-    # Vértices: dos triángulos por quad, 6 floats (pos, uv, Y, Z)
-    def _quad(self, corners):
-        tri = [0, 1, 2, 0, 2, 3]
-        return np.asarray(corners, np.float32)[tri]
+    # --- Vértices (numpy, sin OpenGL) ---
 
-    def sprite_quad(self, sheet: SpriteSheet, feet, body_h_m, row, col):
-        """Quad de un sprite: ancho y alto escalados para que el cuerpo mida body_h_m."""
+    def sprite_vertices(self, sheet: SpriteSheet, feet, body_h, rows, cols, tint, level):
+        """(n·6, FLOATS): dos triángulos por personaje, de pie sobre sus pies."""
         g = self.geo
-        X, Y, Z = feet
+        feet = np.asarray(feet, float).reshape(-1, 3)
+        n = len(feet)
+        X, Y, Z = feet[:, 0], feet[:, 1], feet[:, 2]
         fw, fh = sheet.frame_size
-        scale = body_h_m * g.sy / fh
+        scale = np.asarray(body_h, float) * g.sy / fh
         w, h = fw * scale, fh * scale
         x = X * g.tile_w / g.cell_w
-        s = Z * g.sz - Y * g.sy                       # pantalla (píxeles de mundo) de los pies
-        u0, v0, u1, v1 = sheet.uv(row, col)
-        top_y = Y + h / g.sy                          # altura del borde superior del sprite
-        return self._quad([(x - w / 2, s - h, u0, v0, top_y, Z), (x + w / 2, s - h, u1, v0, top_y, Z),
-                           (x + w / 2, s, u1, v1, Y, Z), (x - w / 2, s, u0, v1, Y, Z)])
+        s = Z * g.sz - Y * g.sy
+        u0 = np.asarray(cols) / sheet.cols
+        v0 = np.asarray(rows) / sheet.rows
+        u1, v1 = u0 + 1 / sheet.cols, v0 + 1 / sheet.rows
+        top = Y + h / g.sy
+        bias = LEVEL_BIAS * np.floor(Y / g.cell_h + 1e-6) + 0.05
+        corners = [  # arriba-izq, arriba-der, abajo-der, abajo-izq
+            (x - w / 2, s - h, u0, v0, top), (x + w / 2, s - h, u1, v0, top),
+            (x + w / 2, s, u1, v1, Y), (x - w / 2, s, u0, v1, Y)]
+        quad = np.zeros((n, 4, FLOATS), np.float32)
+        for k, (px, py, uu, vv, yy) in enumerate(corners):
+            quad[:, k, 0], quad[:, k, 1], quad[:, k, 2], quad[:, k, 3] = px, py, uu, vv
+            quad[:, k, 4], quad[:, k, 5] = yy, Z
+        quad[:, :, 6:9] = np.asarray(tint, np.float32).reshape(-1, 1, 3)
+        quad[:, :, 9] = bias[:, None]
+        quad[:, :, 10] = np.asarray(level, np.float32)[:, None]
+        return quad[:, [0, 1, 2, 0, 2, 3]].reshape(-1, FLOATS)
 
-    def shadow_quad(self, feet, ground_y, radius_m):
+    def shadow_vertices(self, feet, ground, radius, level):
         g = self.geo
-        X, _Y, Z = feet
-        rx, rz = radius_m * 1.3, radius_m * 0.9
-        corners = []
-        for du, dv in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
-            px = (X + du * rx) * g.tile_w / g.cell_w
+        feet = np.asarray(feet, float).reshape(-1, 3)
+        ground = np.asarray(ground, float)
+        X, Z = feet[:, 0], feet[:, 2]
+        rx, rz = np.asarray(radius) * 1.3, np.asarray(radius) * 0.9
+        quad = np.zeros((len(feet), 4, FLOATS), np.float32)
+        for k, (du, dv) in enumerate(((-1, -1), (1, -1), (1, 1), (-1, 1))):
             pz = Z + dv * rz
-            corners.append((px, pz * g.sz - ground_y * g.sy, du, dv, ground_y, pz))
-        return self._quad(corners)
+            quad[:, k, 0] = (X + du * rx) * g.tile_w / g.cell_w
+            quad[:, k, 1] = pz * g.sz - ground * g.sy
+            quad[:, k, 2], quad[:, k, 3] = du, dv
+            quad[:, k, 4], quad[:, k, 5] = ground, pz
+        quad[:, :, 9] = (LEVEL_BIAS * np.floor(ground / g.cell_h + 1e-6) + 0.02)[:, None]
+        quad[:, :, 10] = np.asarray(level, np.float32)[:, None]
+        return quad[:, [0, 1, 2, 0, 2, 3]].reshape(-1, FLOATS)
 
-    def _draw(self, verts, texture, shadow, bias, camera, show_depth, lights=None):
+    # --- Dibujo ---
+
+    def _draw(self, verts, texture, shadow, camera, show_depth, lights, cut, max_level):
         g = self.geo
         glUseProgram(self.program)
-        glUniform1f(self.u["u_m_per_px"], g.cell_w / g.tile_w)
-        if lights is not None:
-            lights.set_light_uniforms(self.u, camera)
-        else:
-            glUniform1i(self.u["u_lighting"], 0)
         glUniformMatrix4fv(self.u["u_projection"], 1, GL_FALSE, camera.projection().T)
         glUniform1i(self.u["u_sheet"], 0)
         glUniform1i(self.u["u_shadow"], int(shadow))
         glUniform2f(self.u["u_scale"], g.sz, g.sy)
         glUniform2f(self.u["u_closeness_range"], g.closeness_min, g.closeness_max)
-        glUniform1f(self.u["u_bias"], bias)
         glUniform1i(self.u["u_show_depth"], int(show_depth))
+        glUniform1f(self.u["u_m_per_px"], g.cell_w / g.tile_w)
+        level, center, radius = cut if cut is not None else (1e9, (0.0, 0.0), -1.0)
+        glUniform1f(self.u["u_cut_level"], float(level))
+        glUniform2f(self.u["u_cut_center"], *center)
+        glUniform1f(self.u["u_cut_radius"], float(radius))
+        glUniform1f(self.u["u_max_level"], float(max_level))
+        if lights is not None:
+            lights.set_light_uniforms(self.u, camera)
+        else:
+            glUniform1i(self.u["u_lighting"], 0)
         if texture:
             glActiveTexture(GL_TEXTURE0)
             glBindTexture(GL_TEXTURE_2D, texture)
@@ -208,22 +273,36 @@ class SpriteRenderer:
         glDrawArrays(GL_TRIANGLES, 0, len(verts))
         glBindVertexArray(0)
         glUseProgram(0)
+        self.draw_calls += 1
+
+    def draw_batch(self, sheet: SpriteSheet, feet, ground, body_h, radius, rows, cols, tint, camera,
+                   show_depth=False, lights=None, cut=None, max_level=1e9):
+        """Todos los personajes de una hoja: sombras (sin escribir profundidad) y luego sprites.
+
+        ``cut``: (planta, centro, radio) para ocultar lo que esté por encima, o None."""
+        feet = np.asarray(feet, float).reshape(-1, 3)
+        if len(feet) == 0:
+            return
+        g = self.geo
+        level = np.floor(feet[:, 1] / g.cell_h + 1e-6)
+        ground = np.asarray(ground, float)
+        has_ground = ground > -1e8
+        glDepthMask(GL_FALSE)
+        if has_ground.any():
+            sv = self.shadow_vertices(feet[has_ground], ground[has_ground], np.asarray(radius)[has_ground],
+                                      level[has_ground])
+            self._draw(sv, 0, True, camera, show_depth, lights, cut, max_level)
+        glDepthMask(GL_TRUE)
+        verts = self.sprite_vertices(sheet, feet, body_h, rows, cols, tint, level)
+        self._draw(verts, sheet.texture, False, camera, show_depth, lights, cut, max_level)
 
     def draw(self, sheet: SpriteSheet, actors, camera, show_depth=False, lights=None):
-        """``actors``: lista de (pies (X, Y, Z), suelo bajo los pies, alto, radio, fila, columna).
-        ``lights``: el WorldRenderer, para iluminar con sus mismas luces (o None, sin luz)."""
-        g = self.geo
-        # Sombras primero, sin escribir profundidad (no deben tapar los pies)
-        glDepthMask(GL_FALSE)
-        for feet, ground, _h, radius, _row, _col in actors:
-            if ground > -1e8:
-                bias = LEVEL_BIAS * np.floor(ground / g.cell_h + 1e-6) + 0.02
-                self._draw(self.shadow_quad(feet, ground, radius), 0, True, bias, camera, show_depth)
-        glDepthMask(GL_TRUE)
-        for feet, _ground, h, _radius, row, col in actors:
-            bias = LEVEL_BIAS * np.floor(feet[1] / g.cell_h + 1e-6) + 0.05
-            self._draw(self.sprite_quad(sheet, feet, h, row, col), sheet.texture, False, bias, camera, show_depth,
-                       lights)
+        """Compatibilidad: ``actors`` como lista de (pies, suelo, alto, radio, fila, columna)."""
+        if not actors:
+            return
+        feet, ground, h, r, rows, cols = (list(t) for t in zip(*actors))
+        self.draw_batch(sheet, feet, ground, h, r, rows, cols, np.ones((len(feet), 3)), camera,
+                        show_depth, lights)
 
     def delete(self):
         glDeleteVertexArrays(1, [self.vao])

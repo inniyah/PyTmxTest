@@ -1,72 +1,136 @@
-from conftest import ROOT
-from tmx_explorer.entities import Direction, EntityManager
-from tmx_explorer.map.collision import FLAG_SOLID, CollisionMap
-from tmx_explorer.renderer.atlas import TextureAtlas, layout_atlas
+"""Personajes: tipos, tabla con identificadores, contactos entre cilindros y multitudes."""
+import json
 
-SPRITE = str(ROOT / "assets" / "people" / "guy.png")
+import numpy as np
+import pytest
 
-
-def test_sprites_share_frames_and_gpu_atlas():
-    em = EntityManager()
-    a = em.create_character(SPRITE)
-    b = em.create_npc(SPRITE)
-    assert a.sprite is not b.sprite                 # estado de animación propio
-    assert a.sprite.frames is b.sprite.frames       # imágenes compartidas
-    assert a.sprite._gpu is b.sprite._gpu           # un solo atlas en GPU
-
-
-def test_walk_cycle_skips_idle_frame():
-    sprite = EntityManager().load_sprite(SPRITE)
-    sprite.set_walking(True)
-    seen = []
-    for _ in range(7):
-        sprite.update(1 / sprite.animation_speed)
-        seen.append(sprite.current_frame)
-    assert seen == [2, 3, 1, 2, 3, 1, 2]
-    sprite.set_walking(False)
-    sprite.update(0.1)
-    assert sprite.current_frame == 0
+from engine.compiler import compile_tmx
+from engine.entities import BRAIN_WANDER, ActorTable, load_types
+from engine.entities.world_sim import ActorSim
+from engine.physics import WalkerPhysics, Walkers
+from engine.world.store import SQLiteWorldStore
+from engine.world.view import WorldView
+from tools.pieces.build import build_tileset
+from tools.pieces.course import build_course
+from tools.pieces.levels import build_levels
 
 
-def test_wall_sliding():
-    collision = CollisionMap(10, 1, 10)
-    collision.data[0, :, 5] = FLAG_SOLID            # pared vertical en x = 5
-    em = EntityManager(tile_width=32, tile_height=32, collision_map=collision, max_z=1)
-    c = em.create_character(SPRITE, x=4.5 * 32, y=4.5 * 32, speed=100)
-    c.move(1, 1)
-    for _ in range(60):
-        c.update(1 / 60)
-    assert c.x < 5 * 32                             # no atraviesa la pared...
-    assert c.y > 4.5 * 32 + 30                      # ...pero se desliza en Y
-    assert c.sprite.direction in (Direction.DOWN, Direction.RIGHT)
+@pytest.fixture(scope="module")
+def worlds(tmp_path_factory):
+    out = tmp_path_factory.mktemp("crowd")
+    tsx = build_tileset(out / "assets")
+    build_course(out / "course.tmx", tsx)
+    build_levels(out / "levels.tmx", tsx)
+    for name in ("course", "levels"):
+        assert compile_tmx(out / f"{name}.tmx", out / f"{name}.cworld").ok
+    return {name: WorldView(SQLiteWorldStore(out / f"{name}.cworld")) for name in ("course", "levels")}
 
 
-def test_patrol_visits_points():
-    em = EntityManager()
-    pts = [(0, 0), (100, 0)]
-    npc = em.create_npc_patrol(SPRITE, points=pts, speed=200)
-    for _ in range(200):
-        npc.update(1 / 60)
-    assert npc.patrol_index in (0, 1) and npc.x > 0
+# --- Tipos y tabla ---------------------------------------------------------------------
+
+def test_types_merge_defaults(tmp_path):
+    types = load_types()
+    assert {"persona", "niño", "perro", "guardia"} <= set(types)
+    assert types["perro"].height == 0.6 and types["perro"].step == types["persona"].step   # heredado
+    bad = tmp_path / "t.json"
+    bad.write_text(json.dumps({"defecto": {}, "raro": {"alas": 2}}))
+    with pytest.raises(ValueError):
+        load_types(bad)
 
 
-def test_long_frame_does_not_tunnel_through_walls():
-    collision = CollisionMap(20, 1, 3)
-    collision.data[0, :, 10] = FLAG_SOLID                # pared de un tile en x = 10
-    em = EntityManager(tile_width=32, tile_height=32, collision_map=collision, max_z=1)
-    c = em.create_character(SPRITE, x=8.5 * 32, y=1.5 * 32, speed=150)
-    c.move(1, 0)
-    c.update(1.5)                                         # frame de 1.5 s
-    assert c.x < 10 * 32
+def test_handles_survive_reuse_of_rows():
+    t = ActorTable(load_types(), capacity=2)
+    a = t.spawn("persona", [0, 0, 0])
+    b = t.spawn("perro", [1, 0, 1])
+    c = t.spawn("guardia", [2, 0, 2])                        # crece la capacidad
+    assert t.capacity >= 3 and len(t) == 3
+    t.despawn(b)
+    d = t.spawn("niño", [3, 0, 3])
+    assert t.row(d) == (b & 0xFFFFFFFF)                      # misma fila…
+    assert not t.valid(b) and t.valid(d) and t.valid(a) and t.valid(c)   # …otro identificador
+    with pytest.raises(KeyError):
+        t.get(b)
+    actor = t.get(d)
+    assert actor.type_name == "niño" and actor.mass == 30.0
+    actor.pos = [5, 0, 5]
+    assert np.allclose(t.pos[t.row(d)], [5, 0, 5])
 
 
-def test_characters_above_view_level_are_not_drawn():
-    em = EntityManager(max_z=3)
-    low = em.create_character(SPRITE, z=0)
-    em.create_character(SPRITE, z=2)
-    sprite = low.sprite
-    _, regions = layout_atlas({(d, i): f for d, fr in sprite.frames.items()
-                               for i, f in enumerate(fr)}, 1024)
-    sprite._gpu.atlas = TextureAtlas([object()], regions)     # atlas falso, sin GPU
-    count = lambda max_z: sum(len(v) for v in em.collect_render_data(0, max_z=max_z).values()) // 4
-    assert count(None) == 2 and count(2) == 2 and count(1) == 1
+# --- Contactos -------------------------------------------------------------------------
+
+def _pair(phys, masses, wishes, start=(20.0, 24.0), seconds=2.0):
+    w = Walkers.create([[start[0], 0, 21.0], [start[1], 0, 21.0]])
+    w.mass[:] = masses
+    w.grounded[:] = True
+    for _ in range(int(seconds * 60)):
+        w.wish[:] = wishes
+        phys.step(w, 1 / 60)
+    return w
+
+
+def test_head_on_collision_stops_at_the_sum_of_radii(worlds):
+    w = _pair(WalkerPhysics(worlds["course"]), [70, 70], [(1, 0), (-1, 0)])
+    assert w.pos[1, 0] - w.pos[0, 0] == pytest.approx(0.5, abs=0.01)
+
+
+def test_heavier_pushes_lighter(worlds):
+    phys = WalkerPhysics(worlds["course"])
+    light = _pair(phys, [140, 70], [(1, 0), (0, 0)], start=(20.0, 20.6), seconds=1.5)
+    heavy = _pair(phys, [70, 140], [(1, 0), (0, 0)], start=(20.0, 20.6), seconds=1.5)
+    assert light.pos[1, 0] - 20.6 > heavy.pos[1, 0] - 20.6 + 0.3     # el ligero cede más
+
+
+def test_infinite_mass_does_not_move(worlds):
+    w = _pair(WalkerPhysics(worlds["course"]), [70, np.inf], [(1, 0), (0, 0)], start=(20.0, 20.6))
+    assert w.pos[1, 0] == pytest.approx(20.6) and w.pos[1, 0] - w.pos[0, 0] == pytest.approx(0.5, abs=0.01)
+
+
+def test_cylinders_on_different_floors_do_not_touch(worlds):
+    phys = WalkerPhysics(worlds["levels"])
+    # Uno en la planta baja del edificio y otro justo encima, en la planta 1
+    w = Walkers.create([[33.0, 0.0, 15.0], [33.1, 3.0, 15.0]])
+    w.grounded[:] = True
+    phys.step(w, 1 / 60)
+    assert np.allclose(w.pos[:, [0, 2]], [[33.0, 15.0], [33.1, 15.0]])
+
+
+def test_neighbour_pairs_match_brute_force():
+    rng = np.random.default_rng(0)
+    x, z = rng.uniform(0, 20, 300), rng.uniform(0, 20, 300)
+    i, j = WalkerPhysics._neighbour_pairs(x, z, 1.0)
+    found = {(a, b) for a, b in zip(i.tolist(), j.tolist())}
+    d = np.hypot(x[:, None] - x[None], z[:, None] - z[None])
+    close = {(a, b) for a, b in zip(*np.nonzero(d < 1.0)) if a < b}
+    assert close <= found                                    # ningún par cercano se pierde
+
+
+# --- Multitudes ------------------------------------------------------------------------
+
+@pytest.mark.parametrize("name", ["course", "levels"])
+def test_crowd_wanders_without_overlaps_or_falls(worlds, name):
+    view = worlds[name]
+    table = ActorTable(load_types())
+    rng = np.random.default_rng(5)
+    sim = ActorSim(view, table, rng)
+    points = sim.spawn_points(150, rng, levels=list(range(view.level_min, view.level_max + 1)))
+    kinds = rng.choice(["persona", "niño", "perro", "guardia"], len(points), p=[0.55, 0.15, 0.2, 0.1])
+    for p, kind in zip(points, kinds):
+        table.spawn(kind, p, brain=BRAIN_WANDER)
+    start = table.pos[table.rows()].copy()
+    start_level = np.floor((start[:, 1] + 0.05) / 3)
+    for _ in range(20):                                       # 20 s, comprobando cada segundo
+        sim.step(1.0)
+        rows = table.rows()
+        x, y, z = table.pos[rows].T
+        r, h = table.radius[rows], table.height[rows]
+        body = sim.physics.support(x, z, y + h)
+        assert (body - y < 0.06).all()                        # nadie dentro del suelo
+        d = np.hypot(x[:, None] - x[None], z[:, None] - z[None]) - (r[:, None] + r[None])
+        same_floor = (y[:, None] < y[None] + h[None]) & (y[None] < y[:, None] + h[:, None])
+        np.fill_diagonal(same_floor, False)
+        assert d[same_floor].min() > -0.05                    # sin solaparse (aglomeraciones contra paredes: 5 cm)
+        assert (x > 0).all() and (z > 0).all()
+    moved = np.hypot(x - start[:, 0], z - start[:, 2])
+    assert np.median(moved) > 2.0                             # de verdad pasean
+    end_level = np.floor((y + 0.05) / 3)
+    assert (end_level == start_level).mean() > 0.9            # casi nadie se cae de su planta
