@@ -250,3 +250,37 @@ def test_generated_roads_follow_the_terrain_and_connect_every_door(town):
         return np.mean(diffs)
     straight = _straight_roads(info.doors, H.shape[1] - 1, H.shape[0] - 1)
     assert climb(info.road) < climb(straight)
+
+
+@pytest.mark.parametrize("far", [False, True], ids=["con física", "lejos, sin física"])
+def test_waiting_npcs_spread_inside_their_place(town, far):
+    """Al llegar, cada uno reserva un sitio libre dentro del lugar (el más lejano de la entrada) y
+    espera allí: nadie se queda apiñado en la puerta y no hay dos en el mismo sitio."""
+    _i, _store, view, g, places, materials = town
+    types = load_types()
+    table = ActorTable(types)
+    rng = np.random.default_rng(11)
+    routines = RoutineBrains(g, places, types, materials, rng)
+    sim = ActorSim(view, table, rng, routines=routines)
+    houses = [p for p in places if p.kind == "casa"][:3]
+    plaza = routines.plazas[0]
+    rows = []
+    for i in range(18):                               # 6 por casa, todos vienen de la plaza
+        home = houses[i % len(houses)]
+        x, y, z = g.position(int(rng.choice(routines.cache.goal_nodes(routines.places[plaza]))))
+        row = table.row(table.spawn("persona", [x, y, z], brain=BRAIN_ROUTINE))
+        table.home[row], table.target_place[row] = home.id, home.id
+        rows.append(row)
+    rows = np.array(rows)
+    focus = (9999.0, 9999.0) if far else None
+    inside_ok, seen_waiting = True, 0
+    for _ in range(240):
+        sim.step(1.0, focus)
+        w = rows[(table.routine_state[rows] == 1) & (table.target_place[rows] != plaza)]
+        seen_waiting = max(seen_waiting, len(w))
+        cx = np.floor(table.pos[w, 0] / g.cell_w).astype(int)
+        cy = np.floor(table.pos[w, 2] / g.cell_w).astype(int)
+        inside_ok &= all(routines.places[int(table.target_place[r])].contains(x, y) for r, x, y in zip(w, cx, cy))
+        spots = table.spot_node[w][table.spot_node[w] >= 0]
+        assert len(spots) == len(set(spots.tolist()))
+    assert seen_waiting >= 6 and inside_ok

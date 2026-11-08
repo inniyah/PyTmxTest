@@ -64,6 +64,7 @@ class ActorTable:
         self.routine_timer = grow(g("routine_timer"))
         self.last_node = grow(g("last_node"), fill=-1, dtype=np.int64)
         self.travel_progress = grow(g("travel_progress"))      # m recorridos del tramo actual (lejos)
+        self.spot_node = grow(g("spot_node"), fill=-1, dtype=np.int64)  # sitio reservado en el lugar
         self.capacity = capacity
 
     # --- Altas y bajas ---
@@ -98,6 +99,7 @@ class ActorTable:
         self.routine_timer[row] = 0
         self.last_node[row] = -1
         self.travel_progress[row] = 0.0
+        self.spot_node[row] = -1
         return self.handle(row)
 
     def despawn(self, handle: int):

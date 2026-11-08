@@ -273,7 +273,9 @@ no depende de nada más que numpy, Pillow, PyOpenGL y glfw. Con `--npcs N` en un
 a la plaza y vuelve: con costes, el 78 % del recorrido es camino (sin costes, el 15 %). Lejos
 de la cámara siguen su rutina sin física: dos veces por segundo avanzan por su camino según el
 tiempo, apoyados en el suelo, y al volver cerca siguen con física (3000 NPC lejanos ≈ 7 ms por
-segundo de juego). El generador traza los caminos con el mismo cálculo sobre la rejilla de
+segundo de juego). Al entrar en un lugar, cada uno reserva un sitio libre dentro (el más lejano
+de la entrada, para que se llene desde el fondo) y espera allí: nadie se queda apiñado en la
+puerta. El generador traza los caminos con el mismo cálculo sobre la rejilla de
 celdas: evitan las pendientes, siguen las curvas de nivel y se unen en una red con ramales.
 
 **Mundo grande.** `tools/pieces/terrain.py` genera un terreno de alturas en las esquinas (tipo
