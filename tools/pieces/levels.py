@@ -9,6 +9,11 @@ Zonas (coordenadas de celda):
                y llega a la planta 1 en (20, 6) por un hueco del forjado con barandilla.
                Agujero en el suelo de la planta 1 en (16, 5).
     balcón     x 15-16, y = 10, en la planta 1, sobre la calle, con salida por la pared sur.
+
+Sucesos de prueba: una placa en la calle (3, 12) que lleva al balcón; un mensaje al entrar en el
+edificio (una vez); tres palancas en la calle (x 1, 6, 11; y = 15) que se usan con E y cuentan;
+y un paso al este (x 23-24, y 14-15) que, con las tres palancas, lleva a la planta 1 del
+edificio y, si no, dice cuántas faltan.
 """
 
 from pathlib import Path
@@ -86,6 +91,20 @@ def build_levels(tmx_path: Path, tsx_path: Path, proj: Projection = DEFAULT_PROJ
     b.light(1, 17.5, 6.0, "#ffb070", radius=6.0, intensity=1.5)
     b.light(1, 16.0, 10.5, "#ff9a6a", radius=4.0, intensity=1.2, height=1.6)
 
+    # --- Sucesos de prueba ---
+    b.marker(1, 15.9, 10.5, "balcony")
+    b.marker(1, 17.5, 4.5, "upstairs")
+    b.event(0, 3, 12, 4, 13, "plate", when="enter",
+            do='message "Una placa mágica te lleva al balcón"\nteleport balcony')
+    b.event(0, x0 + 1, y1, x1, y1 + 1, "welcome", when="enter", times=1,
+            do='message "Bienvenido al edificio"')
+    for i, lx in enumerate((1, 6, 11), start=1):
+        b.event(0, lx, 15, lx + 1, 16, f"lever_{i}", when="use", times=1,
+                do='add levers 1\nmessage "Palanca {levers} de 3"')
+    b.event(0, 23, 14, 25, 16, "gate", when="enter", **{"if": "levers >= 3"},
+            do='message "Las tres palancas abren el paso"\nwait 1\nteleport upstairs')
+    b.event(0, 23, 14, 25, 16, "gate_closed", when="enter", **{"if": "levers < 3"},
+            do='message "El paso está cerrado: faltan palancas ({levers} de 3)"')
     m = b.to_map(tsx_path, tmx_path, proj)
     tmx_path.parent.mkdir(parents=True, exist_ok=True)
     m.save(tmx_path, encoding="csv")

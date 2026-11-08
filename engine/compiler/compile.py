@@ -414,6 +414,71 @@ def collect_places(tmx: tm.TiledMap, report: Report):
     return rows
 
 
+TRIGGERS = ("enter", "exit", "inside", "use")
+
+
+def collect_events(tmx: tm.TiledMap, cell_w: float, report: Report):
+    """Rectángulos de clase "event" y puntos de clase "marker" de las capas de objetos.
+
+    Un suceso: when (enter, exit, inside, use), who (player, all o un tipo), times (0 = sin
+    límite), if (condición), do (acciones, una por línea), enabled (por defecto, sí). Se
+    comprueban sus acciones y su condición, y que existan los marcadores y sucesos que nombran:
+    los fallos son errores, con el nombre del suceso y su planta."""
+    from engine.events.script import ScriptError, parse_actions, parse_condition
+    events, markers, raw = [], {}, []
+
+    def prop(obj, name, default=""):
+        return str(obj.properties[name].value) if name in obj.properties else default
+
+    def visit(layers, level):
+        for layer in layers:
+            if isinstance(layer, tm.LayerGroup):
+                z = layer.properties.get("Z")
+                visit(layer.layers, int(z.value) if z is not None else level)
+            elif isinstance(layer, tm.ObjectGroup):
+                for obj in layer.objects:
+                    if obj.type == "marker":
+                        if not obj.name:
+                            report.errors.append(f"Marcador sin nombre en la planta {level} (objeto {obj.id})")
+                        elif obj.name in markers:
+                            report.errors.append(f"Marcador '{obj.name}' repetido")
+                        markers[obj.name] = (obj.name, level, obj.x / tmx.tilewidth * cell_w,
+                                             obj.y / tmx.tileheight * cell_w)
+                    elif obj.type == "event":
+                        raw.append((obj, level))
+
+    visit(tmx.layers, 0)
+    names = {obj.name for obj, _ in raw if obj.name}
+    for obj, level in raw:
+        label = f"Suceso '{obj.name or obj.id}' (planta {level})"
+        if obj.width <= 0 or obj.height <= 0:
+            report.errors.append(f"{label}: debe ser un rectángulo")
+            continue
+        when = prop(obj, "when", "enter")
+        if when not in TRIGGERS:
+            report.errors.append(f"{label}: when = '{when}' (hay: {', '.join(TRIGGERS)})")
+            continue
+        try:
+            actions = parse_actions(prop(obj, "do"))
+            parse_condition(prop(obj, "if"))
+        except ScriptError as e:
+            report.errors.append(f"{label}: {e}")
+            continue
+        for a in actions:
+            if a.name == "teleport" and a.args[0] not in markers:
+                report.errors.append(f"{label}: línea {a.line}: no hay ningún marcador '{a.args[0]}'")
+            if a.name in ("enable", "disable") and a.args[0] not in names:
+                report.errors.append(f"{label}: línea {a.line}: no hay ningún suceso '{a.args[0]}'")
+        x0, y0 = math.floor(obj.x / tmx.tilewidth), math.floor(obj.y / tmx.tileheight)
+        x1 = math.ceil((obj.x + obj.width) / tmx.tilewidth)
+        y1 = math.ceil((obj.y + obj.height) / tmx.tileheight)
+        times = int(float(prop(obj, "times", "0") or 0))
+        enabled = prop(obj, "enabled", "true").lower() not in ("false", "0", "no")
+        events.append((len(events) + 1, obj.name or f"event_{obj.id}", level, x0, y0, x1, y1, when,
+                       prop(obj, "who", "player"), times, prop(obj, "if"), prop(obj, "do"), int(enabled)))
+    return events, list(markers.values())
+
+
 # --- 5. Columnas y chunks ------------------------------------------------------------
 
 def build_chunks(world: World, obstacles: np.ndarray, visual: np.ndarray, size: int):
@@ -475,6 +540,9 @@ def compile_tmx(tmx_path, out_path, chunk_size: int = 32, compression: str = "zl
     used = np.unique(world.tiles & GID_MASK)
     region_of_gid, regions, pages = build_atlas(tmx, tmx_path, used[used != 0], report)
     visual = visual_values(world, region_of_gid)
+    # Antes de decidir si hay errores: un suceso mal escrito impide compilar
+    events, markers = collect_events(tmx, float(next(
+        (p.value for ts in tmx.tilesets for k, p in ts.properties.items() if k == "cell_width_m"), 2.0)), report)
 
     if report.errors and not force:
         report.stats["tiempo_s"] = round(time.perf_counter() - t0, 2)
@@ -498,6 +566,9 @@ def compile_tmx(tmx_path, out_path, chunk_size: int = 32, compression: str = "zl
         places = collect_places(tmx, report)
         store.write_places(places)
         report.stats["lugares"] = len(places)
+        store.write_events(events, markers)
+        report.stats["sucesos"] = len(events)
+        report.stats["marcadores"] = len(markers)
         props = {k: p.value for ts in tmx.tilesets for k, p in ts.properties.items()}
         report.stats.update({
             "celdas_con_contenido": int(((obstacles != 0) | visual.any(-1)).sum()),

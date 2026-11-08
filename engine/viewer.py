@@ -8,7 +8,7 @@ Controles: WASD/flechas: andar (sin personaje, mover la vista) · Espacio: salta
 arrastrar con el ratón: mover la vista (deja de seguir al personaje; F vuelve a seguirlo) ·
 rueda o +/-: zoom · PgUp/PgDn: planta más alta que se dibuja · C: cómo ocultar lo que tapa al
 personaje (fachada, círculo, planta entera o nada) · L: iluminación sí/no · N: día/noche ·
-K: farol · T: tinte por altura · G: tinte por material del suelo · P: profundidad por píxel ·
+K: farol · E: usar · T: tinte por altura · G: tinte por material del suelo · P: profundidad por píxel ·
 M: sin mapas de albedo y normales
 (diagnóstico de rendimiento) · Inicio: centrar · ESC: salir.
 """
@@ -26,7 +26,9 @@ from PIL import Image
 from engine.entities import BRAIN_NONE, BRAIN_ROUTINE, BRAIN_WANDER, ActorTable, RoutineBrains, load_types
 from tmx_explorer import __version__
 from engine.entities.world_sim import PHYSICS_HZ, ActorSim
+from engine.events import EventSystem
 from engine.render.gpu_timer import GpuTimer
+from engine.render.overlay import TextOverlay
 from engine.render.sprites import (
     ROWS_4, WALK_FPS, SpriteRenderer, SpriteSheet, delete_sheet, facing_index, facing_indices,
 )
@@ -82,6 +84,11 @@ class Viewer:
         self.types = load_types()
         self.table = ActorTable(self.types)
         self.routines = self._load_routines()
+        g = self.renderer.geo
+        self.events = EventSystem.from_store(self.view.store, g.cell_w, g.cell_h) \
+            if self.view.store.events() else None
+        self.overlay = TextOverlay()
+        self._use = False
         self.sim = ActorSim(self.view, self.table, self.rng, routines=self.routines)
         self.sprites = SpriteRenderer(self.renderer.geo)
         self.gpu_timer = GpuTimer()                       # tiempo de GPU por tramo (barra de título)
@@ -220,6 +227,8 @@ class Viewer:
                 r.material_tint = not r.material_tint
             elif key == glfw.KEY_F and self.player is not None:
                 self.follow = True
+            elif key == glfw.KEY_E:
+                self._use = True                       # usar (sucesos "use")
             elif key == glfw.KEY_SPACE and self.player is not None:
                 self.player.request_jump()
             elif key == glfw.KEY_PAGE_UP:
@@ -275,6 +284,9 @@ class Viewer:
         t0 = time.perf_counter()
         focus = self.focus()
         self.sim.step(dt, focus, max_steps=MAX_PHYSICS_STEPS)
+        if self.events is not None:
+            self.events.update(t, dt, self.sim.physics, self.player_handle, use=self._use)
+        self._use = False
         self.sim_ms = 0.9 * self.sim_ms + 0.1 * (time.perf_counter() - t0) * 1000
         self._evict_timer += dt
         if self._evict_timer > EVICT_EVERY:
@@ -504,6 +516,7 @@ class Viewer:
         rows = self.visible_actors()
         self.drawn_actors = int(rows.size)
         if rows.size == 0:
+            self.draw_messages()
             return
         cut = None if r.cut_level is None else (r.cut_level, r.cut_center, r.cut_radius)
         self.sprites.draw_calls = 0
@@ -516,6 +529,7 @@ class Viewer:
                 sheet, t.pos[sel], t.support[sel], t.height[sel], t.radius[sel],
                 np.array([ROWS_4[int(f)] for f in t.facing[sel]]), sheet.walk_cols(t.anim_time[sel], WALK_FPS),
                 t.tint[sel], self.camera, r.show_depth, lights=r, cut=cut, max_level=r.max_level)
+        self.draw_messages()
 
     def visible_actors(self):
         """Filas de los personajes cuyo sprite puede verse (con margen para el más alto)."""
@@ -544,6 +558,11 @@ class Viewer:
         g = self.gpu_timer.ms
         parts = "+".join(f"{g.get(k, 0.0):.1f}" for k in ("mundo", "sombras", "personajes"))
         return f"GPU {sum(g.values()):.1f} ms ({parts} mundo/sombras/personajes) · CPU dibujo {self.cpu_ms:.1f} ms"
+
+    def draw_messages(self):
+        if self.events is not None and self.events.messages:
+            w, h = glfw.get_framebuffer_size(self.window)
+            self.overlay.draw([m.text for m in self.events.messages], w, h)
 
     def screenshot(self, path):
         for _ in range(2):                    # el primer frame carga chunks y texturas
@@ -589,6 +608,7 @@ class Viewer:
     def close(self):
         for sheet in self.sheets.values():
             delete_sheet(sheet)
+        self.overlay.delete()
         self.gpu_timer.delete()
         self.sprites.delete()
         self.renderer.delete()

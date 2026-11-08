@@ -30,6 +30,11 @@ CREATE TABLE IF NOT EXISTS atlas_regions (id INTEGER PRIMARY KEY, page INTEGER,
     x INTEGER, y INTEGER, w INTEGER, h INTEGER, border INTEGER);
 CREATE TABLE IF NOT EXISTS atlas_pages (page INTEGER, kind TEXT, png BLOB, PRIMARY KEY (page, kind));
 CREATE TABLE IF NOT EXISTS nav (cx INTEGER, cy INTEGER, data BLOB, PRIMARY KEY (cx, cy));
+CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, name TEXT, level INTEGER,
+                                   x0 INTEGER, y0 INTEGER, x1 INTEGER, y1 INTEGER,
+                                   trigger TEXT, who TEXT, times INTEGER, condition TEXT,
+                                   actions TEXT, enabled INTEGER);
+CREATE TABLE IF NOT EXISTS markers (name TEXT PRIMARY KEY, level INTEGER, x REAL, z REAL);
 CREATE TABLE IF NOT EXISTS places (id INTEGER PRIMARY KEY, name TEXT, kind TEXT, level INTEGER,
                                    x0 INTEGER, y0 INTEGER, x1 INTEGER, y1 INTEGER);
 CREATE TABLE IF NOT EXISTS lights (id INTEGER PRIMARY KEY, x REAL, y REAL, z REAL,
@@ -139,6 +144,26 @@ class SQLiteWorldStore(WorldStore):
         return [k for (k,) in self.db.execute("SELECT DISTINCT kind FROM atlas_pages ORDER BY kind")]
 
     # --- Ciclo de vida ---
+
+    # --- Sucesos y marcadores ---
+
+    def write_events(self, events, markers):
+        self.db.execute("DELETE FROM events")
+        self.db.execute("DELETE FROM markers")
+        self.db.executemany("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", events)
+        self.db.executemany("INSERT INTO markers VALUES (?, ?, ?, ?)", markers)
+
+    def events(self):
+        try:
+            return self.db.execute("SELECT * FROM events ORDER BY id").fetchall()
+        except sqlite3.OperationalError:            # mundo compilado antes de los sucesos
+            return []
+
+    def markers(self):
+        try:
+            return self.db.execute("SELECT name, level, x, z FROM markers").fetchall()
+        except sqlite3.OperationalError:
+            return []
 
     # --- Lugares (rectángulos de celdas [x0, x1) × [y0, y1) en una planta) ---
 

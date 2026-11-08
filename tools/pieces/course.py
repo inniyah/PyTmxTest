@@ -34,6 +34,8 @@ class CourseBuilder:
         self.gid = {p.name: i + 1 for i, p in enumerate(pieces)}
         self.cells: Dict[Tuple[int, str], Dict[Tuple[int, int], int]] = {}
         self.lights: Dict[int, list] = {}
+        self.events: Dict[int, list] = {}
+        self.markers: Dict[int, list] = {}
 
     def light(self, level: int, x: float, y: float, color: str = "#ffd9a0", radius: float = 6.0,
               intensity: float = 1.5, height: float = 2.2):
@@ -56,6 +58,14 @@ class CourseBuilder:
         for y in range(y0, y1 + 1):
             for x in range(x0, x1 + 1):
                 self.put(level, x, y, name)
+
+    def event(self, level: int, x0: int, y0: int, x1: int, y1: int, name: str, **props):
+        """Suceso: rectángulo de celdas [x0, x1) × [y0, y1); propiedades when, who, times, if, do…"""
+        self.events.setdefault(level, []).append((x0, y0, x1, y1, name, props))
+
+    def marker(self, level: int, x: float, y: float, name: str):
+        """Marcador con nombre (destino de teleport), en coordenadas de celda."""
+        self.markers.setdefault(level, []).append((x, y, name))
 
     def to_map(self, tsx_path: Path, tmx_path: Path, proj: Projection) -> tm.TiledMap:
         m = tm.create_empty_map(self.width, self.height, proj.tile_w, proj.row_h)
@@ -83,11 +93,31 @@ class CourseBuilder:
             if level in self.lights:
                 group.layers.append(self._light_layer(level, next_id, proj))
                 next_id += 1
+            if level in self.events or level in self.markers:
+                group.layers.append(self._event_layer(level, next_id, proj))
+                next_id += 1
             m.layers.append(group)
         m.extra_attrib.update({"nextlayerid": str(next_id), "nextobjectid": str(self._next_object)})
         return m
 
     _next_object = 1
+
+    def _event_layer(self, level, layer_id, proj):
+        import xml.etree.ElementTree as ET
+        og = tm.ObjectGroup(name="sucesos", id=layer_id)
+        for x0, y0, x1, y1, name, props in self.events.get(level, []):
+            og.objects.append(tm.MapObject(
+                id=self._next_object, name=name, type="event", x=x0 * proj.tile_w, y=y0 * proj.row_h,
+                width=(x1 - x0) * proj.tile_w, height=(y1 - y0) * proj.row_h,
+                properties={k: tm.Property(k, "int" if isinstance(v, int) else "string", v)
+                            for k, v in props.items()}))
+            self._next_object += 1
+        for x, y, name in self.markers.get(level, []):
+            obj = tm.MapObject(id=self._next_object, name=name, type="marker", x=x * proj.tile_w, y=y * proj.row_h)
+            obj.extra_children.append(ET.Element("point"))
+            og.objects.append(obj)
+            self._next_object += 1
+        return og
 
     def _light_layer(self, level, layer_id, proj):
         import xml.etree.ElementTree as ET

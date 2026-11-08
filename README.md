@@ -83,6 +83,7 @@ python -m engine.viewer MUNDO.cworld [opciones]
 | L | Iluminación sí / no |
 | N | Día / noche |
 | K | Farol del personaje |
+| E | Usar (sucesos con `when = use`) |
 | T | Tinte por altura |
 | G | Tinte por material del suelo |
 | P | Ver la profundidad por píxel |
@@ -195,6 +196,47 @@ Rectángulos de clase `place` en una capa de objetos, con su nombre y una propie
 (`casa`, `plaza`, `taberna`…). Son los destinos de la navegación: las rutinas de los NPC
 usan las casas y la plaza.
 
+### Sucesos
+
+Los sucesos se definen en Tiled, sin tocar código: **rectángulos de clase `event`** en una capa
+de objetos dentro del grupo de su planta.
+
+| Propiedad | Valores | Por defecto |
+|---|---|---|
+| `when` | `enter`, `exit`, `inside` (cada segundo dentro), `use` (tecla E dentro) | `enter` |
+| `who` | `player`, `all` o un tipo de personaje (`perro`) | `player` |
+| `times` | cuántas veces puede ocurrir; `0` = siempre | `0` |
+| `if` | condición: `key`, `not key`, `levers >= 3` (también `<=`, `>`, `<`, `==`, `!=`), con `and` y `or` | (siempre) |
+| `do` | acciones, una por línea (texto de varias líneas en Tiled) | |
+| `enabled` | `false` para empezar desactivado | `true` |
+
+| Acción | |
+|---|---|
+| `message "texto"` | muestra un mensaje; `{variable}` se sustituye por su valor |
+| `teleport marcador` | lleva a quien disparó el suceso a un **marcador**: un objeto punto de clase `marker`, con nombre |
+| `set variable [valor]` | pone una variable (por defecto, 1) |
+| `clear variable` | la quita (vale 0) |
+| `add variable n` | le suma n |
+| `wait segundos` | espera antes de seguir con las acciones siguientes |
+| `enable suceso`, `disable suceso` | activa o desactiva los sucesos con ese nombre |
+| `call función [args…]` | llama a una función de Python que el juego registra con `EventSystem.on("función", f)` |
+
+Por ejemplo, tres palancas y un paso que solo se abre con las tres:
+
+```
+lever_1   when: use    times: 1   do: add levers 1
+                                      message "Palanca {levers} de 3"
+gate      when: enter  if: levers >= 3
+                                  do: message "Las tres palancas abren el paso"
+                                      wait 1
+                                      teleport upstairs
+```
+
+El compilador comprueba las acciones y las condiciones, y que existan los marcadores y sucesos
+que se nombran; los fallos son errores con el nombre del suceso y la línea. Las condiciones no
+usan `eval`: un mapa no puede ejecutar código. El mapa `maps/levels` trae ejemplos: una placa en
+la calle que lleva al balcón, un mensaje al entrar en el edificio, tres palancas y un paso.
+
 ---
 
 ## Compilar
@@ -216,7 +258,7 @@ El `.cworld` es una base de datos SQLite con:
   ocupa; por encima hay aire y por debajo, macizo.
 - **Atlas** de texturas: color, posición, normales y albedo, con un borde de 16 px por región
   para los niveles reducidos (mipmaps) que se usan de lejos.
-- **Luces, lugares y materiales.**
+- **Luces, lugares, materiales, sucesos y marcadores.**
 - **Grafo de navegación** (salvo con `--no-nav`): superficies transitables, sus vecinos, su
   holgura y su material. Se calcula con la misma física que mueve a los personajes, así que lo
   que el grafo dice que se puede andar, se puede.
@@ -292,9 +334,10 @@ engine/                     El motor
   physics/                  Física de andar para cilindros, vectorizada, con contactos entre ellos
   entities/                 Tipos de personaje, tabla de personajes, paseo, rutinas, simulación por zonas
   nav/                      Grafo de navegación, costes, caminos mínimos, campos de flujo, lugares
+  events/                   Sucesos: su pequeño lenguaje (acciones y condiciones) y el sistema en el juego
   viewer.py                 Visor: python -m engine.viewer
 tools/pieces/               Catálogo de piezas, render oblicuo, tileset y mapas de prueba (terreno incluido)
-assets/                     Tileset de prueba, sprites, types.json, materials.json
+assets/                     Tileset de prueba, sprites, types.json, materials.json, fuente (DejaVu Sans)
 maps/                       Mapas de ejemplo (los .cworld se generan)
 tests/                      Tests (pytest)
 docs/                       Documentación antigua del explorador y de tmx_manager
@@ -328,7 +371,7 @@ para comprobar que coincide con la física). Para depurar llamadas a OpenGL, eje
 
 - La luz atraviesa las paredes (no hay sombras de las luces puntuales).
 - Los personajes no se esquivan con antelación: se apartan al chocar.
-- Aún no hay sucesos (celdas activas, zonas), puertas que se abran ni objetos.
+- Aún no hay zonas que se muevan con un personaje, puertas que se abran ni objetos.
 - A zoom muy lejano, cada chunk se dibuja con todo su detalle; falta un dibujo simplificado.
 
 ---

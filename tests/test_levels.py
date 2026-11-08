@@ -218,14 +218,16 @@ def test_facade_room_is_the_building_interior(world, viewer_factory):
 
 
 def test_facade_never_hides_anything_outdoors(world, viewer_factory, tmp_path):
-    for spawn in ((3.5, 14.5), (13.5, 6.5), (17.5, 12.5)):            # calle, junto al edificio, delante
-        v = viewer_factory(world, 480, 320, visible=False, spawn=spawn, spawn_level=0)
-        try:
-            v.renderer.lighting.enabled = False
+    v = viewer_factory(world, 480, 320, visible=False, spawn=(3.5, 14.5), spawn_level=0)
+    try:                                                 # una sola ventana: se mueve al jugador
+        v.renderer.lighting.enabled = False
+        for spawn in ((3.5, 14.5), (13.5, 6.5), (17.5, 12.5)):        # calle, junto al edificio, delante
+            v.player.pos = v._spawn_point(spawn, 0)
+            v._center_on_player(1.0)
             assert not v.covered()
             assert np.array_equal(_shot(v, tmp_path, "no"), _shot(v, tmp_path, "fachada"))
-        finally:
-            v.close()
+    finally:
+        v.close()
 
 
 def _three(v, tmp_path):

@@ -1,5 +1,5 @@
 <?xml version='1.0' encoding='utf-8'?>
-<map version="1.10" tiledversion="1.11.0" orientation="orthogonal" renderorder="right-down" width="26" height="18" tilewidth="128" tileheight="92" infinite="0" nextlayerid="11" nextobjectid="10">
+<map version="1.10" tiledversion="1.11.0" orientation="orthogonal" renderorder="right-down" width="26" height="18" tilewidth="128" tileheight="92" infinite="0" nextlayerid="13" nextobjectid="19">
  <properties>
   <property name="level_height" type="int" value="133" />
  </properties>
@@ -139,12 +139,68 @@
     <point />
    </object>
   </objectgroup>
+  <objectgroup id="6" name="sucesos">
+   <object id="8" name="plate" class="event" x="384" y="1104" width="128" height="92">
+    <properties>
+     <property name="when" value="enter" />
+     <property name="do">message "Una placa mágica te lleva al balcón"
+teleport balcony</property>
+    </properties>
+   </object>
+   <object id="9" name="welcome" class="event" x="1920" y="828" width="768" height="92">
+    <properties>
+     <property name="when" value="enter" />
+     <property name="times" type="int" value="1" />
+     <property name="do" value="message &quot;Bienvenido al edificio&quot;" />
+    </properties>
+   </object>
+   <object id="10" name="lever_1" class="event" x="128" y="1380" width="128" height="92">
+    <properties>
+     <property name="when" value="use" />
+     <property name="times" type="int" value="1" />
+     <property name="do">add levers 1
+message "Palanca {levers} de 3"</property>
+    </properties>
+   </object>
+   <object id="11" name="lever_2" class="event" x="768" y="1380" width="128" height="92">
+    <properties>
+     <property name="when" value="use" />
+     <property name="times" type="int" value="1" />
+     <property name="do">add levers 1
+message "Palanca {levers} de 3"</property>
+    </properties>
+   </object>
+   <object id="12" name="lever_3" class="event" x="1408" y="1380" width="128" height="92">
+    <properties>
+     <property name="when" value="use" />
+     <property name="times" type="int" value="1" />
+     <property name="do">add levers 1
+message "Palanca {levers} de 3"</property>
+    </properties>
+   </object>
+   <object id="13" name="gate" class="event" x="2944" y="1288" width="256" height="184">
+    <properties>
+     <property name="when" value="enter" />
+     <property name="if" value="levers &gt;= 3" />
+     <property name="do">message "Las tres palancas abren el paso"
+wait 1
+teleport upstairs</property>
+    </properties>
+   </object>
+   <object id="14" name="gate_closed" class="event" x="2944" y="1288" width="256" height="184">
+    <properties>
+     <property name="when" value="enter" />
+     <property name="if" value="levers &lt; 3" />
+     <property name="do" value="message &quot;El paso está cerrado: faltan palancas ({levers} de 3)&quot;" />
+    </properties>
+   </object>
+  </objectgroup>
  </group>
- <group id="6" name="Planta 1" offsety="-133">
+ <group id="7" name="Planta 1" offsety="-133">
   <properties>
    <property name="Z" type="int" value="1" />
   </properties>
-  <layer id="7" name="piezas" class="object" width="26" height="18">
+  <layer id="8" name="piezas" class="object" width="26" height="18">
    <data encoding="csv">
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
@@ -166,7 +222,7 @@
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 </data>
   </layer>
-  <layer id="8" name="piezas2" class="object" width="26" height="18">
+  <layer id="9" name="piezas2" class="object" width="26" height="18">
    <data encoding="csv">
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
@@ -188,7 +244,7 @@
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 </data>
   </layer>
-  <layer id="9" name="suelo" class="floor" width="26" height="18">
+  <layer id="10" name="suelo" class="floor" width="26" height="18">
    <data encoding="csv">
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
@@ -210,8 +266,8 @@
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 </data>
   </layer>
-  <objectgroup id="10" name="luces">
-   <object id="8" name="luz" class="light" x="2240" y="552">
+  <objectgroup id="11" name="luces">
+   <object id="15" name="luz" class="light" x="2240" y="552">
     <properties>
      <property name="color" type="color" value="#ffb070" />
      <property name="radius" type="float" value="6" />
@@ -220,13 +276,21 @@
     </properties>
     <point />
    </object>
-   <object id="9" name="luz" class="light" x="2048" y="966">
+   <object id="16" name="luz" class="light" x="2048" y="966">
     <properties>
      <property name="color" type="color" value="#ff9a6a" />
      <property name="radius" type="float" value="4" />
      <property name="intensity" type="float" value="1.2" />
      <property name="height" type="float" value="1.6" />
     </properties>
+    <point />
+   </object>
+  </objectgroup>
+  <objectgroup id="12" name="sucesos">
+   <object id="17" name="balcony" class="marker" x="2035.2" y="966">
+    <point />
+   </object>
+   <object id="18" name="upstairs" class="marker" x="2240" y="414">
     <point />
    </object>
   </objectgroup>
