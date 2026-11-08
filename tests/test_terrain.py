@@ -202,3 +202,35 @@ def test_rising_terrain_is_not_a_roof_but_a_house_is(terrain):
             assert v.covered()
     finally:
         v.close()
+
+
+def test_only_visible_actors_are_drawn(terrain):
+    glfw = pytest.importorskip("glfw")
+    if not glfw.init():
+        pytest.skip("sin pantalla para OpenGL")
+    glfw.window_hint(glfw.VISIBLE, 0)
+    probe = glfw.create_window(16, 16, "sonda", None, None)
+    if not probe:
+        glfw.terminate()
+        pytest.skip("no se puede crear una ventana OpenGL")
+    glfw.destroy_window(probe)
+    from engine.viewer import Viewer
+    v = Viewer(terrain, 480, 320, visible=False, spawn=(64, 64), npcs=400, seed=1)
+    try:
+        v.camera.zoom = 1.0
+        v._center_on_player(1.0)
+        v.frame()
+        drawn = set(v.visible_actors().tolist())
+        assert 0 < v.drawn_actors < len(v.table) / 4             # solo los de alrededor
+        assert v.table.row(v.player_handle) in drawn
+        # Los que no se dibujan están de verdad fuera de la vista
+        g = v.renderer.geo
+        left, top, right, bottom = v.camera.bounds()
+        for row in v.table.rows():
+            if row in drawn:
+                continue
+            X, Y, Z = v.table.pos[row]
+            sx, sy = X * g.tile_w / g.cell_w, Z * g.sz - Y * g.sy
+            assert not (left < sx < right and top < sy < bottom)
+    finally:
+        v.close()

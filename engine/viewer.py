@@ -39,6 +39,7 @@ CUT_RADIUS_CELLS = 2.5
 LANTERN = {"color": (1.0, 0.62, 0.30), "radius": 5.0, "intensity": 1.3, "height": 1.5}
 NPC_MIX = {"persona": 0.55, "niño": 0.15, "perro": 0.2, "guardia": 0.1}
 EVICT_EVERY = 2.0            # segundos entre descargas de chunks lejanos
+MAX_PHYSICS_STEPS = 4        # pasos de física por frame como mucho (a 15 fps o menos, va más lento)
 
 
 class Viewer:
@@ -85,6 +86,7 @@ class Viewer:
         self.lantern = True
         self.sim_ms = 0.0
         self._evict_timer = 0.0
+        self.drawn_actors = 0
         if self.player is not None:
             self._center_on_player(1.0)
 
@@ -219,7 +221,7 @@ class Viewer:
             player.wish = wish if wish is not None else self._direction()    # X este, Z sur
         t0 = time.perf_counter()
         focus = self.focus()
-        self.sim.step(dt, focus)
+        self.sim.step(dt, focus, max_steps=MAX_PHYSICS_STEPS)
         self.sim_ms = 0.9 * self.sim_ms + 0.1 * (time.perf_counter() - t0) * 1000
         self._evict_timer += dt
         if self._evict_timer > EVICT_EVERY:
@@ -313,7 +315,8 @@ class Viewer:
         self.update_lights()
         r.draw(self.camera, glfw.get_framebuffer_size(self.window))
         t = self.table
-        rows = t.rows()
+        rows = self.visible_actors()
+        self.drawn_actors = int(rows.size)
         if rows.size == 0:
             return
         cut = None if r.cut_level is None else (r.cut_level, r.cut_center, r.cut_radius)
@@ -327,6 +330,20 @@ class Viewer:
                 sheet, t.pos[sel], t.support[sel], t.height[sel], t.radius[sel],
                 np.array([ROWS_4[int(f)] for f in t.facing[sel]]), sheet.walk_cols(t.anim_time[sel], WALK_FPS),
                 t.tint[sel], self.camera, r.show_depth, lights=r, cut=cut, max_level=r.max_level)
+
+    def visible_actors(self):
+        """Filas de los personajes cuyo sprite puede verse (con margen para el más alto)."""
+        t, g = self.table, self.renderer.geo
+        rows = t.rows()
+        if rows.size == 0:
+            return rows
+        X, Y, Z = t.pos[rows].T
+        sx = X * g.tile_w / g.cell_w
+        sy = Z * g.sz - Y * g.sy
+        left, top, right, bottom = self.camera.bounds()
+        margin = 3.0 * g.sy                                  # ~3 m: el sprite más alto y su sombra
+        inside = (sx > left - margin) & (sx < right + margin) & (sy > top - margin) & (sy < bottom + margin)
+        return rows[inside]
 
     def screenshot(self, path):
         for _ in range(2):                    # el primer frame carga chunks y texturas

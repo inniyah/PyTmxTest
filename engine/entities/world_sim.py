@@ -73,11 +73,17 @@ class ActorSim:
             self.physics.step(w, dt)
             self.table.store(rows, w)
 
-    def step(self, dt: float, focus=None):
+    def step(self, dt: float, focus=None, max_steps: int = None):
         """Avanza ``dt`` segundos de reloj a paso fijo, por zonas alrededor de ``focus`` (X, Z en
-        metros, o None para simular a todos por completo). Devuelve los pasos dados."""
+        metros, o None para simular a todos por completo). Devuelve los pasos dados.
+
+        ``max_steps`` limita los pasos por llamada: si un frame tarda mucho, el juego va más lento
+        un momento en lugar de dar cada vez más pasos por frame (lo que lo haría aún más lento)."""
         self.accumulator += dt
         step = 1.0 / PHYSICS_HZ
+        if max_steps is not None and self.accumulator > max_steps * step:
+            self.dropped_time = getattr(self, "dropped_time", 0.0) + self.accumulator - max_steps * step
+            self.accumulator = max_steps * step
         done = 0
         while self.accumulator >= step:
             near, mid = self.tiers(self.table.rows(), focus)

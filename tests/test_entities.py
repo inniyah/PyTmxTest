@@ -133,3 +133,14 @@ def test_crowd_wanders_without_overlaps_or_falls(worlds, name):
     assert np.median(moved) > 2.0                             # de verdad pasean
     end_level = np.floor((y + 0.05) / 3)
     assert (end_level == start_level).mean() > 0.9            # casi nadie se cae de su planta
+
+
+def test_max_steps_slows_down_instead_of_spiralling(worlds):
+    """Con un frame muy largo, la simulación da como mucho ``max_steps`` pasos y descarta el resto
+    del tiempo (el juego va más lento un momento) en lugar de acumular cada vez más pasos."""
+    table = ActorTable(load_types())
+    sim = ActorSim(worlds["course"], table, np.random.default_rng(0))
+    table.spawn("persona", [20.0, 0.0, 21.0], brain=BRAIN_WANDER)
+    assert sim.step(1.0, max_steps=4) == 4
+    assert sim.step(1 / 60, max_steps=4) == 1                  # no arrastra el tiempo descartado
+    assert sim.step(0.5) == 30                                  # sin límite, como siempre

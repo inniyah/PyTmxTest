@@ -255,6 +255,12 @@ python -m engine.compiler maps/terrain1k/terrain1k.tmx
 python -m engine.viewer maps/terrain1k/terrain1k.cworld --npcs 3000
 ```
 
+**Rendimiento del dibujo.** Las texturas del atlas se enlazan una vez por página y frame, y
+cada chunk visible cuesta dos llamadas directas a OpenGL; los personajes fuera de la vista no se
+dibujan. PyOpenGL no comprueba errores tras cada llamada (es caro); para depurar, ejecuta con
+`ENGINE_GL_DEBUG=1`. Si un frame tarda mucho, la simulación da como mucho 4 pasos por frame: el
+juego va más lento un momento en lugar de hundirse.
+
 **Ocultar lo que hay encima.** Cuando el personaje tiene algo por encima de su planta en su
 celda o en las de alrededor (un forjado, un puente), se deja de dibujar lo que está por encima
 de su planta: en un círculo a su alrededor o en todo el mapa (tecla C). La detección es

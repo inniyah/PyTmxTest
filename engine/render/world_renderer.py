@@ -21,13 +21,15 @@ from OpenGL.GL import (
     GL_UNSIGNED_BYTE, GL_UNSIGNED_INT, GL_UNSIGNED_SHORT, GL_VERTEX_SHADER, glActiveTexture,
     glBindBuffer, glBindTexture, glBindVertexArray, glBufferData, glClear,
     glClearColor, glClearDepth, glDeleteBuffers, glDeleteTextures, glDeleteVertexArrays,
-    glDepthFunc, glDrawElements, glEnable, glEnableVertexAttribArray, glGenBuffers,
+    glDepthFunc, glEnable, glEnableVertexAttribArray, glGenBuffers,
     glGenTextures, glGenVertexArrays, glGetUniformLocation, glTexImage2D, glTexParameteri,
     glUniform1f, glUniform1i, glUniform2f, glUniform3f, glUniform3fv, glUniform4fv,
     glUniformMatrix4fv, glUseProgram,
     glVertexAttribPointer, glViewport,
 )
 from OpenGL.GL import GL_ONE, glBlendFuncSeparate
+from OpenGL.raw.GL.VERSION.GL_1_1 import glDrawElements as _raw_draw_elements
+from OpenGL.raw.GL.VERSION.GL_3_0 import glBindVertexArray as _raw_bind_vertex_array
 from OpenGL.GL.shaders import compileProgram, compileShader
 from PIL import Image
 
@@ -253,24 +255,31 @@ class WorldRenderer:
         glUniform1f(self.u["u_cell_w"], g.cell_w)
         self.set_light_uniforms(self.u, camera)
 
+        # Texturas y uniforms una vez por página del atlas; por chunk, solo su malla y el dibujo.
+        # Dentro de cada página, los chunks van de norte a sur (mejor mezcla de transparencias).
         self.draw_calls = 0
-        for key in visible:                               # de norte a sur: mejor mezcla de transparencias
+        by_page = {}
+        for key in visible:
             for page, vao, _vbo, _ebo, count in self.meshes[key].parts:
-                glActiveTexture(GL_TEXTURE0)
-                glBindTexture(GL_TEXTURE_2D, self.atlas.color[page])
-                glActiveTexture(GL_TEXTURE1)
-                glBindTexture(GL_TEXTURE_2D, self.atlas.position[page])
-                has_albedo, has_normal = page in self.atlas.albedo, page in self.atlas.normal
-                glUniform1i(self.u["u_has_albedo"], int(has_albedo))
-                glUniform1i(self.u["u_has_normal"], int(has_normal))
-                if has_albedo:
-                    glActiveTexture(GL_TEXTURE2)
-                    glBindTexture(GL_TEXTURE_2D, self.atlas.albedo[page])
-                if has_normal:
-                    glActiveTexture(GL_TEXTURE3)
-                    glBindTexture(GL_TEXTURE_2D, self.atlas.normal[page])
-                glBindVertexArray(vao)
-                glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, None)
+                by_page.setdefault(page, []).append((vao, count))
+        for page, parts in by_page.items():
+            glActiveTexture(GL_TEXTURE0)
+            glBindTexture(GL_TEXTURE_2D, self.atlas.color[page])
+            glActiveTexture(GL_TEXTURE1)
+            glBindTexture(GL_TEXTURE_2D, self.atlas.position[page])
+            has_albedo, has_normal = page in self.atlas.albedo, page in self.atlas.normal
+            glUniform1i(self.u["u_has_albedo"], int(has_albedo))
+            glUniform1i(self.u["u_has_normal"], int(has_normal))
+            if has_albedo:
+                glActiveTexture(GL_TEXTURE2)
+                glBindTexture(GL_TEXTURE_2D, self.atlas.albedo[page])
+            if has_normal:
+                glActiveTexture(GL_TEXTURE3)
+                glBindTexture(GL_TEXTURE_2D, self.atlas.normal[page])
+            # El bucle que crece con el zoom: funciones sin envoltorio (directas a OpenGL)
+            for vao, count in parts:
+                _raw_bind_vertex_array(int(vao))
+                _raw_draw_elements(GL_TRIANGLES, count, GL_UNSIGNED_INT, None)
                 self.draw_calls += 1
         glBindVertexArray(0)
         glUseProgram(0)
