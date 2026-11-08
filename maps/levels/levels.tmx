@@ -1,5 +1,5 @@
 <?xml version='1.0' encoding='utf-8'?>
-<map version="1.10" tiledversion="1.11.0" orientation="orthogonal" renderorder="right-down" width="26" height="18" tilewidth="128" tileheight="92" infinite="0" nextlayerid="13" nextobjectid="19">
+<map version="1.10" tiledversion="1.11.0" orientation="orthogonal" renderorder="right-down" width="26" height="18" tilewidth="128" tileheight="92" infinite="0" nextlayerid="13" nextobjectid="20">
  <properties>
   <property name="level_height" type="int" value="133" />
  </properties>
@@ -14,14 +14,14 @@
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,189,189,189,189,189,189,189,189,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,192,0,0,0,0,0,0,190,228,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,192,0,0,0,0,0,0,190,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,192,0,0,0,0,0,0,190,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,192,0,0,0,0,0,0,190,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,192,0,0,0,0,0,0,190,0,0,0,0,
-0,0,0,0,197,0,0,0,0,197,0,0,0,0,192,0,0,0,0,0,0,190,0,0,0,0,
+0,0,0,0,197,0,0,0,0,197,0,0,0,0,192,0,0,0,0,0,0,190,228,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,191,191,191,0,191,191,191,191,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,227,0,0,0,0,0,0,0,0,227,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
@@ -57,21 +57,21 @@
 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+1,1,1,1,1,1,1,1,1,1,1,1,1,1,229,229,229,229,229,229,229,229,1,1,1,1,
+1,1,1,1,1,1,1,1,1,1,1,1,1,1,229,229,229,229,229,229,229,229,1,1,1,1,
+1,1,1,1,1,1,1,1,1,1,1,1,1,1,229,229,229,229,229,229,229,229,1,1,1,1,
+1,1,1,1,1,1,1,1,1,1,1,1,1,1,229,229,229,229,229,229,229,229,1,1,1,1,
+1,1,1,1,1,1,1,1,1,1,1,1,1,1,229,229,229,229,229,229,6,229,1,1,1,1,
+1,1,9,10,0,1,1,1,1,0,12,11,1,1,229,229,229,229,229,229,5,229,1,1,1,1,
+1,1,1,1,1,1,1,1,1,1,1,1,1,1,229,229,229,229,229,229,229,229,1,1,1,1,
 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,6,1,1,1,1,1,
-1,1,9,10,0,1,1,1,1,0,12,11,1,1,1,1,1,1,1,1,5,1,1,1,1,1,
 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1
+1,230,230,230,230,230,230,230,230,230,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+1,230,230,230,230,230,230,230,230,230,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1
 </data>
   </layer>
   <objectgroup id="5" name="luces">
@@ -138,23 +138,32 @@
     </properties>
     <point />
    </object>
+   <object id="8" name="luz" class="light" x="704" y="1380">
+    <properties>
+     <property name="color" type="color" value="#9fe8ff" />
+     <property name="radius" type="float" value="6" />
+     <property name="intensity" type="float" value="1.2" />
+     <property name="height" type="float" value="2.2" />
+    </properties>
+    <point />
+   </object>
   </objectgroup>
   <objectgroup id="6" name="sucesos">
-   <object id="8" name="plate" class="event" x="384" y="1104" width="128" height="92">
+   <object id="9" name="plate" class="event" x="384" y="1104" width="128" height="92">
     <properties>
      <property name="when" value="enter" />
      <property name="do">message "Una placa mágica te lleva al balcón"
 teleport balcony</property>
     </properties>
    </object>
-   <object id="9" name="welcome" class="event" x="1920" y="828" width="768" height="92">
+   <object id="10" name="welcome" class="event" x="1920" y="828" width="768" height="92">
     <properties>
      <property name="when" value="enter" />
      <property name="times" type="int" value="1" />
      <property name="do" value="message &quot;Bienvenido al edificio&quot;" />
     </properties>
    </object>
-   <object id="10" name="lever_1" class="event" x="128" y="1380" width="128" height="92">
+   <object id="11" name="lever_1" class="event" x="128" y="1380" width="128" height="92">
     <properties>
      <property name="when" value="use" />
      <property name="times" type="int" value="1" />
@@ -162,7 +171,7 @@ teleport balcony</property>
 message "Palanca {levers} de 3"</property>
     </properties>
    </object>
-   <object id="11" name="lever_2" class="event" x="768" y="1380" width="128" height="92">
+   <object id="12" name="lever_2" class="event" x="768" y="1380" width="128" height="92">
     <properties>
      <property name="when" value="use" />
      <property name="times" type="int" value="1" />
@@ -170,7 +179,7 @@ message "Palanca {levers} de 3"</property>
 message "Palanca {levers} de 3"</property>
     </properties>
    </object>
-   <object id="12" name="lever_3" class="event" x="1408" y="1380" width="128" height="92">
+   <object id="13" name="lever_3" class="event" x="1408" y="1380" width="128" height="92">
     <properties>
      <property name="when" value="use" />
      <property name="times" type="int" value="1" />
@@ -178,7 +187,7 @@ message "Palanca {levers} de 3"</property>
 message "Palanca {levers} de 3"</property>
     </properties>
    </object>
-   <object id="13" name="gate" class="event" x="2944" y="1288" width="256" height="184">
+   <object id="14" name="gate" class="event" x="2944" y="1288" width="256" height="184">
     <properties>
      <property name="when" value="enter" />
      <property name="if" value="levers &gt;= 3" />
@@ -187,7 +196,7 @@ wait 1
 teleport upstairs</property>
     </properties>
    </object>
-   <object id="14" name="gate_closed" class="event" x="2944" y="1288" width="256" height="184">
+   <object id="15" name="gate_closed" class="event" x="2944" y="1288" width="256" height="184">
     <properties>
      <property name="when" value="enter" />
      <property name="if" value="levers &lt; 3" />
@@ -267,7 +276,7 @@ teleport upstairs</property>
 </data>
   </layer>
   <objectgroup id="11" name="luces">
-   <object id="15" name="luz" class="light" x="2240" y="552">
+   <object id="16" name="luz" class="light" x="2240" y="552">
     <properties>
      <property name="color" type="color" value="#ffb070" />
      <property name="radius" type="float" value="6" />
@@ -276,7 +285,7 @@ teleport upstairs</property>
     </properties>
     <point />
    </object>
-   <object id="16" name="luz" class="light" x="2048" y="966">
+   <object id="17" name="luz" class="light" x="2048" y="966">
     <properties>
      <property name="color" type="color" value="#ff9a6a" />
      <property name="radius" type="float" value="4" />
@@ -287,10 +296,10 @@ teleport upstairs</property>
    </object>
   </objectgroup>
   <objectgroup id="12" name="sucesos">
-   <object id="17" name="balcony" class="marker" x="2035.2" y="966">
+   <object id="18" name="balcony" class="marker" x="2035.2" y="966">
     <point />
    </object>
-   <object id="18" name="upstairs" class="marker" x="2240" y="414">
+   <object id="19" name="upstairs" class="marker" x="2240" y="414">
     <point />
    </object>
   </objectgroup>

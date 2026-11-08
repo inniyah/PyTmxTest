@@ -26,6 +26,7 @@ from OpenGL.GL import (
     glUniform1f, glUniform1i, glUniform2f, glUniform2i, glUniform3f, glUniform3fv, glUniformMatrix4fv, glUseProgram,
     glVertexAttribPointer, glViewport,
 )
+from OpenGL.GL import GL_COLOR, GLfloat, glClearBufferfv
 from OpenGL.GL import (
     GL_UNPACK_ALIGNMENT, glPixelStorei,
     GL_NEAREST_MIPMAP_NEAREST, GL_ONE, GL_RGBA32F, GL_TEXTURE_BASE_LEVEL, GL_TEXTURE_MAX_LEVEL,
@@ -53,7 +54,11 @@ def ortho(left, right, bottom, top) -> np.ndarray:
 
 
 LIGHT_UNIFORMS = ("u_lighting", "u_sky", "u_ground", "u_sun_dir", "u_sun_color", "u_num_lights",
-                  "u_use_list", "u_light_list[0]", "u_lights", "u_lamps")
+                  "u_use_list", "u_light_list[0]", "u_lights", "u_lamps", "u_view_dir", "u_time",
+                  "u_pulse_period", "u_glow_strength")
+SURFACE_TEXTURE_UNIT = 6
+PULSE_PERIOD = 2.0          # s: un latido del brillo con pulso
+GLOW_STRENGTH = 1.6         # cuánto suma el brillo propio al color
 LIGHT_TEXTURE_UNIT = 4
 FACADE_UNIFORMS = ("u_facade", "u_cut_mask", "u_mask_origin", "u_mask_size", "u_mask_level",
                    "u_mask_floor", "u_cut_feet", "u_cut_keep", "u_facade_cell_w")
@@ -162,7 +167,7 @@ def mip_chains(maps: Dict[str, np.ndarray], levels: int) -> Dict[str, list]:
     renormalizadas. El mapa de posición no tiene niveles: de él salen la profundidad y la
     silueta exactas de cada píxel. El shader lee el texel reducido como (texel completo >> nivel):
     un píxel opaco cae siempre en un bloque que lo contiene, así que nunca lee uno vacío."""
-    out = {k: [v] for k, v in maps.items() if k in ("color", "albedo", "normal")}
+    out = {k: [v] for k, v in maps.items() if k in ("color", "albedo", "normal", "surface")}
 
     def corners(x):
         return (x[0::2, 0::2], x[1::2, 0::2], x[0::2, 1::2], x[1::2, 1::2])
@@ -181,6 +186,11 @@ def mip_chains(maps: Dict[str, np.ndarray], levels: int) -> Dict[str, list]:
         total = weight[0] + weight[1] + weight[2] + weight[3]
         any_opaque = total > 0
         for kind, chain in out.items():
+            if kind == "surface":            # los cuatro canales son datos (A = pulso, no opacidad)
+                parts = corners(chain[-1][:2 * h, :2 * w, :4].astype(np.float32))
+                mean = sum(p * wgt[..., None] for p, wgt in zip(parts, weight)) / np.maximum(total, 1.0)[..., None]
+                chain.append(np.clip(np.rint(mean), 0, 255).astype(np.uint8))
+                continue
             parts = corners(chain[-1][:2 * h, :2 * w, :3].astype(np.float32))
             if kind == "normal":
                 parts = [p / 255.0 * 2.0 - 1.0 for p in parts]
@@ -203,7 +213,7 @@ class GpuAtlas:
     (profundidad y silueta exactas). Con borde 1 (mundos antiguos), sin niveles."""
 
     def __init__(self, store, layout: AtlasLayout):
-        self.color, self.position, self.albedo, self.normal = {}, {}, {}, {}
+        self.color, self.position, self.albedo, self.normal, self.surface = {}, {}, {}, {}, {}
         borders = [int(r[6]) for r in store.atlas_regions()] or [1]
         self.levels = min(MAX_MIP_LEVELS, int(np.floor(np.log2(max(1, min(borders))))))
         for page in layout.page_sizes:
@@ -214,7 +224,7 @@ class GpuAtlas:
             if raw is None:
                 raise ValueError("El mundo no tiene mapa de posición: hace falta para la profundidad por píxel")
             maps["position"] = png16.decode_rgba16(raw)
-            for kind in ("albedo", "normal"):
+            for kind in ("albedo", "normal", "surface"):
                 raw = store.atlas_page(page, kind)
                 if raw is not None:
                     with Image.open(io.BytesIO(raw)) as im:
@@ -222,12 +232,13 @@ class GpuAtlas:
             chains = mip_chains(maps, self.levels)
             self.color[page] = _texture(chains["color"], False)
             self.position[page] = _texture(maps["position"], True)          # siempre completo
-            for kind, dest in (("albedo", self.albedo), ("normal", self.normal)):
+            for kind, dest in (("albedo", self.albedo), ("normal", self.normal), ("surface", self.surface)):
                 if kind in chains:
                     dest[page] = _texture(chains[kind], False)
 
     def delete(self):
-        glDeleteTextures([t for d in (self.color, self.position, self.albedo, self.normal) for t in d.values()])
+        glDeleteTextures([t for d in (self.color, self.position, self.albedo, self.normal, self.surface)
+                          for t in d.values()])
 
 
 class ChunkMesh:
@@ -296,6 +307,9 @@ class WorldRenderer:
         self.chunk_lights = {}
         self.per_chunk_lights = True   # False: cada tile recorre todas las luces de la vista (depurar)
         self.use_material_maps = True  # False: sin leer albedo ni normales (diagnóstico, tecla M)
+        self.time = 0.0                # s: para el pulso del brillo propio
+        self.use_surface = True        # False: sin capa de superficie (comparar, diagnóstico)
+        self.glow_buffer = False       # True: se dibuja para el halo (hay una salida de brillo)
         self.use_mipmaps = True        # False: leer siempre el atlas completo (comparar)
         self.material_tint = False     # True: teñir el suelo según su material (depurar, tecla G)
         self.materials = None          # Materials del mundo (colores del tinte)
@@ -310,7 +324,7 @@ class WorldRenderer:
             "u_projection", "u_color", "u_position", "u_pos_min", "u_pos_max", "u_scale",
             "u_closeness_range", "u_max_y", "u_show_depth", "u_level_bias", "u_cell_h",
             "u_height_tint", "u_cut_y", "u_cut_center", "u_cut_radius", "u_albedo", "u_normal",
-            "u_has_albedo", "u_has_normal", "u_cell_w", "u_lod", "u_material_tint",
+            "u_has_albedo", "u_has_normal", "u_cell_w", "u_lod", "u_material_tint", "u_surface", "u_has_surface",
             "u_material_colors[0]", *LIGHT_UNIFORMS, *FACADE_UNIFORMS)}
 
     # --- Qué chunks se ven ---
@@ -350,6 +364,8 @@ class WorldRenderer:
         glClearColor(0.07, 0.07, 0.09, 1.0)
         glClearDepth(1.0)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        if self.glow_buffer:                       # la salida de brillo, a negro (no al fondo)
+            glClearBufferfv(GL_COLOR, 1, (GLfloat * 4)(0.0, 0.0, 0.0, 0.0))
         glEnable(GL_DEPTH_TEST)
         glDepthFunc(GL_LEQUAL)            # en superficies coincidentes gana la que se dibuja después
         glEnable(GL_BLEND)
@@ -382,6 +398,7 @@ class WorldRenderer:
         if tint:
             glUniform3fv(self.u["u_material_colors[0]"], 16, self.materials.colors.astype(np.float32))
         glUniform1i(self.u["u_albedo"], 2)
+        glUniform1i(self.u["u_surface"], SURFACE_TEXTURE_UNIT)
         glUniform1i(self.u["u_normal"], 3)
         glUniform1f(self.u["u_cell_w"], g.cell_w)
         self.upload_lights(camera, visible)
@@ -422,6 +439,11 @@ class WorldRenderer:
             if has_normal:
                 glActiveTexture(GL_TEXTURE3)
                 glBindTexture(GL_TEXTURE_2D, self.atlas.normal[page])
+            has_surface = maps and self.use_surface and page in self.atlas.surface
+            glUniform1i(self.u["u_has_surface"], int(has_surface))
+            if has_surface:
+                glActiveTexture(GL_TEXTURE0 + SURFACE_TEXTURE_UNIT)
+                glBindTexture(GL_TEXTURE_2D, self.atlas.surface[page])
             # El bucle que crece con el zoom: funciones sin envoltorio (directas a OpenGL)
             for vao, count, key in parts:
                 if self.per_chunk_lights:
@@ -475,6 +497,11 @@ class WorldRenderer:
                        "floor": int(level if floor is None else floor),
                        "feet": float(feet), "keep": float(keep), "cell_w": g.cell_w}
         self.facade = self.facade_state
+
+    @property
+    def has_glow(self) -> bool:
+        """¿Tiene el mundo capa de superficie (y por tanto, quizá, brillo propio)?"""
+        return bool(self.atlas.surface)
 
     def lod(self, camera: Camera) -> float:
         """Nivel del atlas que se lee a este zoom: el que da como mucho dos texels por píxel."""
@@ -530,6 +557,12 @@ class WorldRenderer:
         glUniform3f(u["u_sun_dir"], *(sun / np.linalg.norm(sun)))
         glUniform3f(u["u_sun_color"], *L.sun_color)
         glUniform1f(u["u_lamps"], L.lamps)
+        g = self.geo
+        view = np.array([0.0, g.sz, g.sy])                     # hacia la cámara (vista oblicua)
+        glUniform3f(u["u_view_dir"], *(view / np.linalg.norm(view)))
+        glUniform1f(u["u_time"], float(self.time))
+        glUniform1f(u["u_pulse_period"], PULSE_PERIOD)
+        glUniform1f(u["u_glow_strength"], GLOW_STRENGTH)
         glActiveTexture(GL_TEXTURE0 + LIGHT_TEXTURE_UNIT)
         glBindTexture(GL_TEXTURE_2D, self.light_texture)
         glUniform1i(u["u_lights"], LIGHT_TEXTURE_UNIT)

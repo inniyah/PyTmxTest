@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tmx-explorer"
-version = "3.7.1"
+version = "3.8.0"
 description = "Visor OpenGL de mapas Tiled (TMX) con niveles de altura y personajes"
 readme = "README.md"
 license = { file = "LICENSE" }

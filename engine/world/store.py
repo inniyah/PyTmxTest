@@ -8,7 +8,7 @@ Esquema:
     meta          (key, value)                        valores JSON
     chunks        (cx, cy, col_start, ..., vis_index)  un chunk por fila, cada parte un BLOB
     atlas_regions (id, page, x, y, w, h, border)       región 1.. de cada tile visual
-    atlas_pages   (page, kind, png)                    kind: color, albedo, normal, position
+    atlas_pages   (page, kind, png)                    kind: color, albedo, normal, position, surface
     lights        (id, x, y, z, r, g, b, radius, intensity)   luces puntuales, en metros
 """
 

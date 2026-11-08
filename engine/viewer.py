@@ -8,7 +8,7 @@ Controles: WASD/flechas: andar (sin personaje, mover la vista) · Espacio: salta
 arrastrar con el ratón: mover la vista (deja de seguir al personaje; F vuelve a seguirlo) ·
 rueda o +/-: zoom · PgUp/PgDn: planta más alta que se dibuja · C: cómo ocultar lo que tapa al
 personaje (fachada, círculo, planta entera o nada) · L: iluminación sí/no · N: día/noche ·
-K: farol · E: usar · X: silueta del jugador · T: tinte por altura · G: tinte por material del suelo · P: profundidad por píxel ·
+K: farol · E: usar · X: silueta del jugador · H: halo del brillo propio · T: tinte por altura · G: tinte por material del suelo · P: profundidad por píxel ·
 M: sin mapas de albedo y normales
 (diagnóstico de rendimiento) · Inicio: centrar · ESC: salir.
 """
@@ -28,6 +28,7 @@ from tmx_explorer import __version__
 from engine.entities.world_sim import PHYSICS_HZ, ActorSim
 from engine.events import EventSystem
 from engine.render.gpu_timer import GpuTimer
+from engine.render.bloom import Bloom
 from engine.render.overlay import TextOverlay
 from engine.render.sprites import (
     ROWS_4, WALK_FPS, SpriteRenderer, SpriteSheet, delete_sheet, facing_index, facing_indices,
@@ -92,6 +93,9 @@ class Viewer:
             if self.view.store.events() else None
         self.overlay = TextOverlay()
         self.silhouette = True                 # silueta del jugador donde algo lo tapa (tecla X)
+        self.bloom = Bloom()
+        self.halo = True                       # halo del brillo propio (tecla H)
+        self.clock = 0.0
         self._use = False
         self.sim = ActorSim(self.view, self.table, self.rng, routines=self.routines)
         self.sprites = SpriteRenderer(self.renderer.geo)
@@ -231,6 +235,8 @@ class Viewer:
                 r.material_tint = not r.material_tint
             elif key == glfw.KEY_F and self.player is not None:
                 self.follow = True
+            elif key == glfw.KEY_H:
+                self.halo = not self.halo
             elif key == glfw.KEY_X:
                 self.silhouette = not self.silhouette
             elif key == glfw.KEY_E:
@@ -288,6 +294,8 @@ class Viewer:
         else:
             player.wish = wish if wish is not None else self._direction()    # X este, Z sur
         t0 = time.perf_counter()
+        self.clock += dt
+        self.renderer.time = self.clock
         focus = self.focus()
         self.sim.step(dt, focus, max_steps=MAX_PHYSICS_STEPS)
         if self.events is not None:
@@ -554,6 +562,22 @@ class Viewer:
     # --- Dibujo ---
 
     def frame(self):
+        """Un frame: el mundo y los personajes (en la imagen intermedia del halo si hay brillo
+        propio), el halo, y encima los mensajes."""
+        r = self.renderer
+        w, h = glfw.get_framebuffer_size(self.window)
+        halo = self.halo and r.has_glow and not r.show_depth
+        if halo:
+            self.bloom.begin(w, h)
+            r.glow_buffer = True
+        self.draw_scene()
+        if halo:
+            r.glow_buffer = False
+            with self.gpu_timer("halo"):
+                self.bloom.end(w, h)
+        self.draw_messages()
+
+    def draw_scene(self):
         r = self.renderer
         self.update_cut()
         self.update_lights()
@@ -562,7 +586,6 @@ class Viewer:
         rows = self.visible_actors()
         self.drawn_actors = int(rows.size)
         if rows.size == 0:
-            self.draw_messages()
             return
         cut = None if r.cut_level is None else (r.cut_level, r.cut_center, r.cut_radius)
         self.sprites.draw_calls = 0
@@ -576,7 +599,6 @@ class Viewer:
                 np.array([ROWS_4[int(f)] for f in t.facing[sel]]), sheet.walk_cols(t.anim_time[sel], WALK_FPS),
                 t.tint[sel], self.camera, r.show_depth, lights=r, cut=cut, max_level=r.max_level)
         self.draw_player_silhouette(cut)
-        self.draw_messages()
 
     def draw_player_silhouette(self, cut):
         """Silueta del jugador donde algo lo tapa (al aire libre no se oculta nada del escenario)."""
@@ -612,10 +634,10 @@ class Viewer:
         return f" · rutinas: {moving} en camino, {len(mine) - moving} en un lugar, {self.routines.arrived} llegadas"
 
     def timing_text(self) -> str:
-        """Tiempos del dibujo: GPU por tramo (mundo, sombras, personajes) y CPU de preparar el frame."""
+        """Tiempos del dibujo: GPU por tramo (mundo, sombras, personajes, halo) y CPU de preparar el frame."""
         g = self.gpu_timer.ms
-        parts = "+".join(f"{g.get(k, 0.0):.1f}" for k in ("mundo", "sombras", "personajes"))
-        return f"GPU {sum(g.values()):.1f} ms ({parts} mundo/sombras/personajes) · CPU dibujo {self.cpu_ms:.1f} ms"
+        parts = "+".join(f"{g.get(k, 0.0):.1f}" for k in ("mundo", "sombras", "personajes", "halo"))
+        return f"GPU {sum(g.values()):.1f} ms ({parts} mundo/sombras/personajes/halo) · CPU dibujo {self.cpu_ms:.1f} ms"
 
     def draw_messages(self):
         if self.events is not None and self.events.messages:
@@ -667,6 +689,7 @@ class Viewer:
         for sheet in self.sheets.values():
             delete_sheet(sheet)
         self.overlay.delete()
+        self.bloom.delete()
         self.gpu_timer.delete()
         self.sprites.delete()
         self.renderer.delete()

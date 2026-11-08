@@ -262,15 +262,19 @@ def check_overflow(world: World, obstacles: np.ndarray, report: Report):
 
 # --- 4. Atlas ------------------------------------------------------------------------
 
+DEFAULT_SURFACE = (0, 255, 0, 0)        # capa de superficie: mate, sin metal, sin brillo, sin pulso
+
 def _tileset_extra_maps(tmx: tm.TiledMap, tmx_path: Path):
-    """GID -> {"normal": RGBA8, "position": RGBA16, "albedo": RGBA8} de los tilesets que los tengan."""
+    """GID -> {"normal": RGBA8, "position": RGBA16, "albedo": RGBA8, "surface": RGBA8} de los
+    tilesets que los tengan."""
     out: Dict[int, Dict[str, object]] = {}
     for ts in tmx.tilesets:
         if not ts.image or ts.columns <= 0:
             continue
         base = tmx_path.parent / Path(ts.source).parent if ts.source else tmx_path.parent
         maps = {}
-        for kind, prop in (("normal", "normal_map"), ("position", "position_map"), ("albedo", "albedo_map")):
+        for kind, prop in (("normal", "normal_map"), ("position", "position_map"), ("albedo", "albedo_map"),
+                           ("surface", "surface_map")):
             if prop in ts.properties:
                 path = base / str(ts.properties[prop].value)
                 maps[kind] = png16.read_rgba16(path) if kind == "position" else \
@@ -305,13 +309,23 @@ def build_atlas(tmx: tm.TiledMap, tmx_path: Path, used_gids: np.ndarray, report:
         raise AssertionError("Regiones del atlas sin alinear: los niveles reducidos mezclarían tiles")
     kinds = ["color"] + [k for k in ("normal", "position", "albedo")
                          if gids and all(k in extras.get(g, {}) for g in gids)]
+    # La capa de superficie basta con que la tenga algún tileset: los demás tiles, mate sin metal
+    # ni brillo (así se puede añadir solo a los tiles que la necesiten)
+    if gids and any("surface" in extras.get(g, {}) for g in gids):
+        kinds.append("surface")
 
     pages = {}
     for kind in kinds:
         dtype = np.uint16 if kind == "position" else np.uint8
         canvases = [np.zeros((h, w, 4), dtype) for w, h in page_sizes]
         for g, pl in zip(gids, placements):
-            src = np.asarray(images[g].convert("RGBA")) if kind == "color" else extras[g][kind]
+            if kind == "color":
+                src = np.asarray(images[g].convert("RGBA"))
+            elif kind == "surface" and "surface" not in extras.get(g, {}):
+                src = np.empty((images[g].height, images[g].width, 4), np.uint8)
+                src[...] = DEFAULT_SURFACE
+            else:
+                src = extras[g][kind]
             h0, w0 = src.shape[:2]
             extra_h, extra_w = aligned(h0 + 2 * b) - (h0 + 2 * b), aligned(w0 + 2 * b) - (w0 + 2 * b)
             tile = np.pad(src, ((b, b + extra_h), (b, b + extra_w), (0, 0)), mode="edge")

@@ -10,6 +10,10 @@ Zonas (coordenadas de celda):
                Agujero en el suelo de la planta 1 en (16, 5).
     balcón     x 15-16, y = 10, en la planta 1, sobre la calle, con salida por la pared sur.
 
+Superficies: suelo pulido en el edificio (planta 0), dos filas de suelo con líneas que brillan
+y laten en la calle (x 1-9, y 16-17), y tubos metálicos de cobre (13, 11), (22, 11) y de acero
+(22, 4), (22, 8).
+
 Sucesos de prueba: una placa en la calle (3, 12) que lleva al balcón; un mensaje al entrar en el
 edificio (una vez); tres palancas en la calle (x 1, 6, 11; y = 15) que se usan con E y cuentan;
 y un paso al este (x 23-24, y 14-15) que, con las tres palancas, lleva a la planta 1 del
@@ -90,6 +94,19 @@ def build_levels(tmx_path: Path, tsx_path: Path, proj: Projection = DEFAULT_PROJ
     b.light(0, 19.0, 8.0, "#ffd0a0", radius=5.0, intensity=1.2)
     b.light(1, 17.5, 6.0, "#ffb070", radius=6.0, intensity=1.5)
     b.light(1, 16.0, 10.5, "#ff9a6a", radius=4.0, intensity=1.2, height=1.6)
+
+    # --- Superficies: suelo pulido en el edificio, líneas que brillan en la calle y tubos ---
+    for yy in range(y0, y1 + 1):
+        for xx in range(x0, x1 + 1):
+            if (xx, yy) not in STAIRS:
+                b.put(0, xx, yy, "floor_polished", replace=True)
+    for yy in (16, 17):
+        for xx in range(1, 10):
+            b.put(0, xx, yy, "floor_glow", replace=True)
+    for (xx, yy), name in (((13, 11), "pipe_copper"), ((22, 11), "pipe_copper"),
+                           ((22, 4), "pipe_steel"), ((22, 8), "pipe_steel")):
+        b.put(0, xx, yy, name)
+    b.light(0, 5.5, 15.0, "#9fe8ff", radius=6.0, intensity=1.2)
 
     # --- Sucesos de prueba ---
     b.marker(1, 15.9, 10.5, "balcony")

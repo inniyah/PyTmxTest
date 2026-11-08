@@ -16,6 +16,7 @@ import tmx_manager as tm
 
 from engine import png16
 from .catalog import Piece, build_catalog
+from .surfaces import DEFAULT_SURFACE
 from .mesh import mesh_for
 from .objio import MTL_NAME, read_obj, write_mtl, write_obj
 from .render import DEFAULT_PROJECTION, Projection, render
@@ -36,21 +37,31 @@ def build_tileset(out: Path, proj: Projection = DEFAULT_PROJECTION, pieces: List
     color = np.zeros((rows * th, COLUMNS * tw, 4), np.uint8)
     normal = np.zeros_like(color)
     albedo = np.zeros_like(color)
+    surface = np.zeros_like(color)
     position = np.zeros((rows * th, COLUMNS * tw, 4), np.uint16)
+    lo = np.array([r[0] for r in proj.position_range])
+    hi = np.array([r[1] for r in proj.position_range])
 
     for i, piece in enumerate(pieces):
         obj_path = obj_dir / f"{piece.name}.obj"
-        write_obj(obj_path, mesh_for(piece.spec, proj.cell), piece.name)
+        write_obj(obj_path, piece.mesh(proj.cell) if piece.mesh else mesh_for(piece.spec, proj.cell), piece.name)
         stairs = piece.category == "rampas rectas"
         c, n, p, a = render(read_obj(obj_path), proj, with_albedo=True,      # el tile sale del .obj
                             outline=piece.layer != "floor" or stairs)
+        covered = c[..., 3] > 0
+        s = np.zeros_like(c)
+        s[covered] = DEFAULT_SURFACE
+        if piece.finish:
+            piece.finish({"color": c, "albedo": a, "normal": n, "surface": s, "covered": covered,
+                          "position": lo + p[..., :3].astype(np.float64) / 65535.0 * (hi - lo)})
         r, col = divmod(i, COLUMNS)
         sl = (slice(r * th, (r + 1) * th), slice(col * tw, (col + 1) * tw))
-        color[sl], normal[sl], position[sl], albedo[sl] = c, n, p, a
+        color[sl], normal[sl], position[sl], albedo[sl], surface[sl] = c, n, p, a, s
 
     Image.fromarray(color).save(out / f"{TILESET_NAME}.png")
     Image.fromarray(normal).save(out / f"{TILESET_NAME}.n.png")
     Image.fromarray(albedo).save(out / f"{TILESET_NAME}.a.png")
+    Image.fromarray(surface).save(out / f"{TILESET_NAME}.s.png")
     png16.write_rgba16(out / f"{TILESET_NAME}.p.png", position)
 
     tileset = tm.Tileset(firstgid=1, name=TILESET_NAME, tilewidth=tw, tileheight=th,
@@ -61,7 +72,7 @@ def build_tileset(out: Path, proj: Projection = DEFAULT_PROJECTION, pieces: List
         "cell_width_m": proj.cell.width, "cell_height_m": proj.cell.height,
         "row_height_px": proj.row_h, "level_height_px": proj.level_h,
         "normal_map": f"{TILESET_NAME}.n.png", "position_map": f"{TILESET_NAME}.p.png",
-        "albedo_map": f"{TILESET_NAME}.a.png",
+        "albedo_map": f"{TILESET_NAME}.a.png", "surface_map": f"{TILESET_NAME}.s.png",
         "position_range_m": f"x {xr[0]:g} {xr[1]:g}; y {yr[0]:g} {yr[1]:g}; z {zr[0]:g} {zr[1]:g}",
     }
     for key, value in meta.items():

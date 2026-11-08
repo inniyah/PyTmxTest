@@ -11,7 +11,8 @@ navegación por caminos.
 - **Compilador** de mapas de Tiled (`.tmx`) a un mundo compilado (`.cworld`, SQLite): chunks,
   atlas de texturas, luces, lugares y grafo de navegación.
 - **Dibujo** con OpenGL 3.3: profundidad por píxel, iluminación por píxel con sol, ambiente y
-  luces puntuales, día y noche, ocultación de lo que hay encima del personaje.
+  luces puntuales, día y noche, metal y superficies pulidas, brillo propio con halo y pulso,
+  interiores como una casa de muñecas.
 - **Personajes** como cilindros con física de andar, saltar y empujarse; tipos definidos en
   datos; miles de NPC con niveles de detalle.
 - **Navegación**: grafo verificado contra la física, costes por material del suelo y por
@@ -85,6 +86,7 @@ python -m engine.viewer MUNDO.cworld [opciones]
 | K | Farol del personaje |
 | E | Usar (sucesos con `when = use`) |
 | X | Silueta del jugador donde algo lo tapa |
+| H | Halo del brillo propio |
 | T | Tinte por altura |
 | G | Tinte por material del suelo |
 | P | Ver la profundidad por píxel |
@@ -121,7 +123,7 @@ en azul claro a través de lo que lo tapa (tecla X para quitarla).
 
 La barra de título muestra la versión, los fps, los personajes por zona de detalle
 (cerca/medio/lejos), el estado de las rutinas, y los tiempos: simulación, **GPU** por tramo
-(mundo, sombras, personajes; medido con consultas de OpenGL) y **CPU** de preparar el dibujo.
+(mundo, sombras, personajes y halo; medido con consultas de OpenGL) y **CPU** de preparar el dibujo.
 
 ---
 
@@ -162,6 +164,28 @@ en horizontal (el compilador refleja su geometría).
 | `row_height_px`, `level_height_px` | 92, 133 | Píxeles por fila de celdas y por planta |
 | `normal_map`, `position_map`, `albedo_map` | `pieces.n.png`… | Mapas que acompañan a la imagen del tileset, con la misma disposición: normales, posición en la celda (PNG de 16 bits, para la profundidad por píxel) y color sin sombrear |
 | `position_range_m` | `x 0 2; y 0 3.75; z 0 2` | Rango del mapa de posición |
+| `surface_map` | `pieces.s.png` | Opcional: capa de superficie (metal, rugosidad, brillo propio y pulso; ver abajo) |
+
+### Capa de superficie: metal, pulido y brillo
+
+Una imagen RGBA de 8 bits con la misma disposición que la del tileset, indicada con la propiedad
+`surface_map`. Cada píxel dice cómo es la superficie del píxel correspondiente:
+
+| Canal | Significado | Sin capa |
+|---|---|---|
+| R | **metal**: 0 no metálico, 255 metal (refleja con su propio color: cobre, oro, acero) | 0 |
+| G | **rugosidad**: 0 pulido como un espejo, 255 mate | 255 |
+| B | **brillo propio**: 0 nada, 255 máximo; brilla con el color del propio píxel, también a oscuras, y con un halo alrededor | 0 |
+| A | **pulso**: 0 brillo fijo; otro valor, el momento de un latido lento (2 s) en el que ese píxel está en su máximo | 0 |
+
+Con el pulso se anima el brillo sin fotogramas: el mismo valor en una zona hace que lata a la
+vez; un degradado a lo largo de una línea hace que la luz la recorra (la energía de un circuito,
+unas flechas que se encienden una tras otra). Basta con que tenga la capa algún tileset: los
+tiles sin ella son mates, sin metal ni brillo, y se ven como siempre.
+
+Los **sprites** pueden llevar la misma capa en un archivo junto a su hoja, `hoja.s.png` (ojos que
+brillan, armaduras metálicas). Las piezas de prueba incluyen tubos de cobre y de acero, un suelo
+pulido y un suelo con líneas que brillan y laten (en `maps/levels`).
 
 ### Propiedades de cada tile: su parte de la celda
 

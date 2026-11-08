@@ -99,9 +99,12 @@ def test_atlas_regions_reproduce_the_tile_images(gallery):
     tmx, world_path, _ = gallery
     store = SQLiteWorldStore(world_path)
     page = np.asarray(Image.open(io.BytesIO(store.atlas_page(0, "color"))))
+    surface_page = np.asarray(Image.open(io.BytesIO(store.atlas_page(0, "surface"))))
     m = tm.TiledMap.load(tmx)
     ts = m.tilesets[0]
-    sheet = np.asarray(Image.open((tmx.parent / ts.source).parent / ts.image.source).convert("RGBA"))
+    folder = (tmx.parent / ts.source).parent
+    sheet = np.asarray(Image.open(folder / ts.image.source).convert("RGBA"))
+    surface_sheet = np.asarray(Image.open(folder / str(ts.properties["surface_map"].value)).convert("RGBA"))
     view = WorldView(store)
     ys, xs = np.mgrid[0:m.height, 0:m.width]
     slots = view.visual(xs, ys, 0)
@@ -118,12 +121,13 @@ def test_atlas_regions_reproduce_the_tile_images(gallery):
                 rid = next(int(V.region(s)) for s in slots[y, x] if V.role(s) == role)
                 _, _, rx, ry, w, h, _ = regions[rid]
                 col, row = (g - 1) % ts.columns, (g - 1) // ts.columns
-                tile = sheet[row * ts.tileheight:(row + 1) * ts.tileheight,
-                             col * ts.tilewidth:(col + 1) * ts.tilewidth]
-                assert np.array_equal(page[ry:ry + h, rx:rx + w], tile)
+                box = (slice(row * ts.tileheight, (row + 1) * ts.tileheight),
+                       slice(col * ts.tilewidth, (col + 1) * ts.tilewidth))
+                assert np.array_equal(page[ry:ry + h, rx:rx + w], sheet[box])
+                assert np.array_equal(surface_page[ry:ry + h, rx:rx + w], surface_sheet[box])
                 checked.add(g)
     assert len(checked) == ts.tilecount - len(_markers(m)) == len(regions)   # todas las piezas visibles
-    assert set(store.atlas_kinds()) == {"color", "albedo", "normal", "position"}
+    assert set(store.atlas_kinds()) == {"color", "albedo", "normal", "position", "surface"}
 
 
 # --- Mapas sintéticos ----------------------------------------------------------------

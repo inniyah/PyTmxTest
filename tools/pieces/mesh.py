@@ -48,6 +48,11 @@ MATERIALS = {
     "wall": (0.55, 0.66, 0.84),
     "fill": (0.62, 0.62, 0.66),
     "ceiling": (0.70, 0.56, 0.80),
+    # Piezas de superficie (con capa de metal, rugosidad y brillo)
+    "copper": (0.86, 0.52, 0.32),
+    "steel": (0.72, 0.75, 0.80),
+    "polished": (0.30, 0.32, 0.38),
+    "glowfloor": (0.13, 0.15, 0.20),
 }
 
 
@@ -162,3 +167,15 @@ def mesh_for(spec: CellSpec, size: CellSize = DEFAULT_CELL) -> Mesh:
         if side in spec.walls:
             faces += _orient_outwards(_prism(WALL_BANDS[side], zero, one, "wall", size))
     return Mesh(faces)
+
+
+def pipe_mesh(material: str, size: CellSize = DEFAULT_CELL, radius: float = 0.12, sides: int = 20) -> Mesh:
+    """Tubo vertical en el centro de la celda, de una planta de alto (``radius`` en fracción de
+    celda): un prisma sobre un polígono de ``sides`` lados, para que tenga brillos que varíen."""
+    ring = [(0.5 + radius * np.cos(a), 0.5 + radius * np.sin(a))
+            for a in np.linspace(0, -2 * np.pi, sides, endpoint=False)]        # antihorario visto desde arriba
+    return Mesh(_orient_outwards(_prism(ring, _const(0.0), _const(1.0), material, size)))
+
+
+def recolored(mesh: Mesh, material: str) -> Mesh:
+    return Mesh([Face(f.points, material) for f in mesh.faces])

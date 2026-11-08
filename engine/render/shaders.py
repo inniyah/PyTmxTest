@@ -59,6 +59,62 @@ vec3 light_at(vec3 world, vec3 n, float wrap) {
     return light;
 }
 
+// Reflejos (GGX): hacia la cámara, que en esta vista oblicua mira siempre en la misma dirección
+uniform vec3 u_view_dir;          // hacia la cámara, normalizado
+float ggx_term(vec3 n, vec3 l, vec3 v, float rough) {
+    vec3 h = normalize(l + v);
+    float nl = max(dot(n, l), 0.0), nv = max(dot(n, v), 1e-3), nh = max(dot(n, h), 0.0);
+    float a = rough * rough, a2 = a * a;
+    float d = nh * nh * (a2 - 1.0) + 1.0;
+    float D = a2 / max(3.14159 * d * d, 1e-6);
+    float k = (rough + 1.0) * (rough + 1.0) / 8.0;
+    float G = nl / (nl * (1.0 - k) + k) * nv / (nv * (1.0 - k) + k);
+    return 3.14159 * D * G / max(4.0 * nl * nv, 1e-4) * nl;          // en las unidades de la difusa
+}
+vec3 fresnel(vec3 f0, float cos_t) { return f0 + (1.0 - f0) * pow(1.0 - clamp(cos_t, 0.0, 1.0), 5.0); }
+vec3 specular_at(vec3 world, vec3 n, vec3 v, float rough, vec3 f0) {
+    vec3 spec = u_sun_color * ggx_term(n, u_sun_dir, v, rough) * fresnel(f0, dot(normalize(u_sun_dir + v), v));
+    for (int k = 0; k < u_num_lights; k++) {
+        int i = (u_use_list == 1) ? u_light_list[k] : k;
+        vec4 p = texelFetch(u_lights, ivec2(0, i), 0);
+        vec3 d = p.xyz - world;
+        float dist = length(d);
+        float r = p.w;
+        if (dist < r) {
+            float q = 1.0 - (dist * dist) / (r * r);
+            vec3 l = d / max(dist, 1e-4);
+            spec += u_lamps * texelFetch(u_lights, ivec2(1, i), 0).rgb * q * q
+                    * ggx_term(n, l, v, rough) * fresnel(f0, dot(normalize(l + v), v));
+        }
+    }
+    return spec;
+}
+const float ENV_BOOST = 1.8;
+const vec2 ENV_WINDOW = vec2(0.5547, 0.8321);    // dirección (x, z) de la zona clara del entorno
+const float METAL_DIFFUSE = 0.25;     // los metales conservan algo de color difuso: se reconoce su color
+// El cielo reflejado (el mismo degradado de la luz ambiente): el metal se ve metálico aunque
+// no haya ninguna luz cerca; cuanto más rugoso, más apagado
+vec3 sky_reflection(vec3 n, vec3 v, float rough, vec3 f0) {
+    // Entorno estilizado: el degradado del ambiente, más luminoso, con una banda clara en el
+    // horizonte (el brillo vertical típico de un tubo); cuanto más rugoso, más apagado
+    vec3 r = reflect(-v, n);
+    vec3 env = mix(u_ground, u_sky, clamp(r.y * 0.5 + 0.5, 0.0, 1.0)) + 0.8 * u_sky * exp(-5.0 * abs(r.y));
+    // Una zona clara lateral (como una ventana): en esta vista, las caras verticales reflejan
+    // todas a la misma altura, y lo que cambia de una a otra es la dirección horizontal del
+    // reflejo; así un tubo tiene su franja de brillo. Los suelos reflejan hacia el norte: nada
+    vec2 rh = r.xz / max(length(r.xz), 1e-4);
+    env += 1.6 * u_sky * pow(max(dot(rh, ENV_WINDOW), 0.0), 16.0) * smoothstep(0.2, 0.6, length(r.xz));
+    return ENV_BOOST * env * fresnel(f0, dot(n, v)) * mix(1.0, 0.3, rough);
+}
+// Brillo propio: con pulso (fase en el canal A; 0 = fijo), un latido lento y suave
+uniform float u_time;
+uniform float u_pulse_period;
+uniform float u_glow_strength;
+float pulse(float phase) {
+    if (phase < 0.5 / 255.0) return 1.0;
+    return 0.25 + 0.75 * (0.5 + 0.5 * cos(6.28318 * (u_time / u_pulse_period - phase)));
+}
+
 vec3 to_linear(vec3 c) { return pow(c, vec3(2.2)); }
 // Hombro suave: hasta 0.8 sin cambios; por encima se acerca a 1 sin recortar en seco
 vec3 shoulder(vec3 c) {
@@ -157,11 +213,14 @@ uniform sampler2D u_normal;
 uniform float u_lod;              // nivel reducido del color, albedo y normales según el zoom
 uniform int u_has_albedo;
 uniform int u_has_normal;
+uniform sampler2D u_surface;      // capa de superficie: R metal, G rugosidad, B brillo, A pulso
+uniform int u_has_surface;
 uniform int u_material_tint;      // 1: teñir el suelo según su material (depuración)
 uniform vec3 u_material_colors[16];
 uniform float u_cell_w;
 """ + LIGHTING_GLSL + FACADE_GLSL + """
-out vec4 frag;
+layout(location = 0) out vec4 frag;
+layout(location = 1) out vec4 glow;    // brillo propio, para el halo (si hay dónde escribirlo)
 
 void main() {
     // Posición del atlas completo: profundidad y silueta exactas de cada píxel. El color, del
@@ -193,6 +252,7 @@ void main() {
                         / (u_closeness_range.y - u_closeness_range.x), 0.0, 1.0);
     gl_FragDepth = depth;
     vec3 rgb = color.rgb;
+    glow = vec4(0.0, 0.0, 0.0, 1.0);
     if (u_lighting == 1) {
         vec3 base = (u_has_albedo == 1) ? texelFetch(u_albedo, texel_lod, lod).rgb : color.rgb;
         vec3 n = vec3(0.0, 1.0, 0.0);
@@ -204,7 +264,24 @@ void main() {
         if (v_flip > 0.5) local.x = u_cell_w - local.x;
         if (u_material_tint == 1 && v_material > 0 && n.y > 0.5)
             base = mix(base, u_material_colors[v_material], 0.75);
-        rgb = to_srgb(to_linear(base) * light_at(v_origin + local, n, 0.0));
+        vec3 lin = to_linear(base);
+        vec3 world = v_origin + local;
+        if (u_has_surface == 1) {
+            vec4 surf = texelFetch(u_surface, texel_lod, lod);
+            float metal = surf.r, rough = max(surf.g, 0.05);
+            vec3 f0 = mix(vec3(0.04), lin, metal);
+            vec3 lit = lin * (1.0 - metal * (1.0 - METAL_DIFFUSE)) * light_at(world, n, 0.0)
+                       + specular_at(world, n, u_view_dir, rough, f0)
+                       + sky_reflection(n, u_view_dir, rough, f0);
+            vec3 emitted = lin * surf.b * pulse(surf.a) * u_glow_strength;
+            rgb = to_srgb(lit + emitted);
+            glow = vec4(emitted, 1.0);
+        } else {
+            rgb = to_srgb(lin * light_at(world, n, 0.0));
+        }
+    } else if (u_has_surface == 1) {
+        vec4 surf = texelFetch(u_surface, texel_lod, lod);
+        glow = vec4(to_linear(color.rgb) * surf.b * pulse(surf.a) * u_glow_strength, 1.0);
     }
     if (u_lighting == 0 && u_material_tint == 1 && v_material > 0)
         rgb = mix(rgb, u_material_colors[v_material], 0.75);

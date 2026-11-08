@@ -7,7 +7,7 @@ from engine.world import CellSpec
 from engine import png16
 from tools.pieces.build import build_gallery, build_tileset
 from tools.pieces.catalog import build_catalog
-from tools.pieces.mesh import MATERIALS, mesh_for
+from tools.pieces.mesh import DEFAULT_CELL, MATERIALS, mesh_for
 from tools.pieces.objio import read_obj, write_mtl, write_obj
 from tools.pieces.render import Projection, render
 
@@ -21,7 +21,10 @@ def faces_of(spec):
 
 
 def test_catalog():
-    assert len(GEOMETRIC) == 218
+    assert len(GEOMETRIC) == 222
+    surfaces = [p for p in CATALOG if p.category == "superficies"]
+    assert {p.name for p in surfaces} == {"pipe_copper", "pipe_steel", "floor_polished", "floor_glow"}
+    assert all(p.finish is not None for p in surfaces)
     markers = [p for p in CATALOG if p.material]
     assert len(markers) == 8 and all(p.spec == CellSpec() for p in markers)
     assert {p.layer for p in CATALOG} == {"floor", "object", "overhead"}
@@ -29,7 +32,7 @@ def test_catalog():
 
 @pytest.mark.parametrize("piece", GEOMETRIC, ids=lambda p: p.name)
 def test_meshes_are_closed_and_point_outwards(piece):
-    mesh = mesh_for(piece.spec)
+    mesh = piece.mesh(DEFAULT_CELL) if piece.mesh else mesh_for(piece.spec)
     lo, hi = mesh.bounds()
     assert (lo >= -1e-9).all() and hi[0] <= 2 + 1e-9 and hi[2] <= 2 + 1e-9 and hi[1] <= 3.75 + 1e-9
     pts = np.concatenate([f.points for f in mesh.faces])
@@ -125,7 +128,7 @@ def test_gallery_loads_in_the_engine_world(built):
 def test_every_face_has_a_valid_outward_normal(piece):
     """Una cara con vértices alineados al principio daba normal indefinida y no se dibujaba."""
     from tools.pieces.mesh import newell_normal
-    mesh = mesh_for(piece.spec)
+    mesh = piece.mesh(DEFAULT_CELL) if piece.mesh else mesh_for(piece.spec)
     center = np.concatenate([f.points for f in mesh.faces]).mean(axis=0)
     for f in mesh.faces:
         assert len(f.points) >= 3

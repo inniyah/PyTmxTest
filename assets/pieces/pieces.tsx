@@ -1,5 +1,5 @@
 <?xml version='1.0' encoding='utf-8'?>
-<tileset version="1.10" tiledversion="1.11.0" name="pieces" tilewidth="128" tileheight="259" tilecount="226" columns="16">
+<tileset version="1.10" tiledversion="1.11.0" name="pieces" tilewidth="128" tileheight="259" tilecount="230" columns="16">
  <properties>
   <property name="cell_width_m" type="float" value="2" />
   <property name="cell_height_m" type="float" value="3" />
@@ -8,6 +8,7 @@
   <property name="normal_map" value="pieces.n.png" />
   <property name="position_map" value="pieces.p.png" />
   <property name="albedo_map" value="pieces.a.png" />
+  <property name="surface_map" value="pieces.s.png" />
   <property name="position_range_m" value="x 0 2; y 0 3.75; z 0 2" />
  </properties>
  <image source="pieces.png" width="2048" height="3885" />
@@ -1521,6 +1522,28 @@
   <properties>
    <property name="piece" value="material_adoquin" />
    <property name="material" value="adoquin" />
+  </properties>
+ </tile>
+ <tile id="226" class="object">
+  <properties>
+   <property name="piece" value="pipe_copper" />
+  </properties>
+ </tile>
+ <tile id="227" class="object">
+  <properties>
+   <property name="piece" value="pipe_steel" />
+  </properties>
+ </tile>
+ <tile id="228" class="floor">
+  <properties>
+   <property name="piece" value="floor_polished" />
+   <property name="floor" value="flat 0" />
+  </properties>
+ </tile>
+ <tile id="229" class="floor">
+  <properties>
+   <property name="piece" value="floor_glow" />
+   <property name="floor" value="flat 0" />
   </properties>
  </tile>
 </tileset>

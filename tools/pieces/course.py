@@ -42,12 +42,14 @@ class CourseBuilder:
         """Luz puntual en la celda (x, y) de esa planta (coordenadas de celda, admiten decimales)."""
         self.lights.setdefault(level, []).append((x, y, color, radius, intensity, height))
 
-    def put(self, level: int, x: int, y: int, name: str, flip: bool = False):
+    def put(self, level: int, x: int, y: int, name: str, flip: bool = False, replace: bool = False):
+        """Pone una pieza; si ya hay otra en su capa, va en otra capa encima (o, con
+        ``replace``, la sustituye)."""
         layer = ROLE_LAYER[self.pieces[name].layer]
         if name.startswith("fill_"):
             layer = "piezas"
         cells = self.cells.setdefault((level, layer), {})
-        if (x, y) in cells:                    # una pieza más en la misma celda: otra capa
+        if (x, y) in cells and not replace:    # una pieza más en la misma celda: otra capa
             n = 2
             while (x, y) in self.cells.setdefault((level, f"{layer}{n}"), {}):
                 n += 1

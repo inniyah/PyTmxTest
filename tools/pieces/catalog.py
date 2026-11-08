@@ -5,7 +5,7 @@ Cada pieza es una parte de celda (CellSpec) con un nombre de archivo, una catego
 """
 
 from dataclasses import dataclass
-from typing import List
+from typing import Callable, List
 
 from engine.world import cell as C
 from engine.world.cellspec import CellSpec
@@ -18,6 +18,8 @@ class Piece:
     layer: str         # floor, object u overhead
     spec: CellSpec
     material: str = None   # material del suelo (los marcadores solo llevan esto, sin geometría)
+    mesh: Callable = None      # malla propia (tamaño de celda -> Mesh); si no, la de su spec
+    finish: Callable = None    # retoque de sus capas (ver surfaces): metal, rugosidad, brillo, pulso
 
 
 def _h(x: float) -> str:
@@ -74,4 +76,19 @@ def build_catalog() -> List[Piece]:
     # capa aparte, y en cada celda cuenta el peor material de todos sus tiles
     for name in load_materials().names:
         pieces.append(Piece(f"material_{name}", "materiales", "floor", CellSpec(), material=name))
+
+    # Superficies: metal, pulido y brillo propio (capa de superficie)
+    from . import surfaces
+    from .mesh import mesh_for, pipe_mesh, recolored
+    flat = CellSpec(floors={"all": "flat 0"})
+    pieces += [
+        Piece("pipe_copper", "superficies", "object", CellSpec(),
+              mesh=lambda size: pipe_mesh("copper", size), finish=surfaces.constant(metal=1.0, rough=0.3)),
+        Piece("pipe_steel", "superficies", "object", CellSpec(),
+              mesh=lambda size: pipe_mesh("steel", size), finish=surfaces.constant(metal=1.0, rough=0.18)),
+        Piece("floor_polished", "superficies", "floor", flat,
+              mesh=lambda size: recolored(mesh_for(flat, size), "polished"), finish=surfaces.constant(rough=0.12)),
+        Piece("floor_glow", "superficies", "floor", flat,
+              mesh=lambda size: recolored(mesh_for(flat, size), "glowfloor"), finish=surfaces.glow_lines()),
+    ]
     return pieces

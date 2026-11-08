@@ -71,9 +71,12 @@ uniform vec2 u_cut_center;         // ...en este círculo (radio < 0: en todo el
 uniform float u_cut_radius;
 uniform float u_max_level;
 uniform vec3 u_silhouette_color;
+uniform sampler2D u_sheet_surface;
+uniform int u_has_surface;
 const float SILHOUETTE_ALPHA = 0.55;
 """ + LIGHTING_GLSL + FACADE_GLSL + """
-out vec4 frag;
+layout(location = 0) out vec4 frag;
+layout(location = 1) out vec4 glow;    // los personajes tapan el brillo de lo que hay detrás
 void main() {
     if (v_level > u_max_level + 0.5) discard;
     bool in_circle = u_cut_radius < 0.0 || distance(v_pos, u_cut_center) < u_cut_radius;
@@ -105,14 +108,33 @@ void main() {
     float depth = clamp(1.0 - (closeness - u_closeness_range.x)
                         / (u_closeness_range.y - u_closeness_range.x), 0.0, 1.0);
     gl_FragDepth = depth;
+    vec3 emitted = vec3(0.0);
+    if (u_shadow == 0 && u_has_surface == 1) {
+        vec4 surf = texture(u_sheet_surface, v_uv);
+        emitted = to_linear(color.rgb) * surf.b * pulse(surf.a) * u_glow_strength;
+    }
     if (u_lighting == 1 && u_shadow == 0) {
         // El sprite, de cara a la cámara (sin normales): luz "envolvente" para que también le
         // alumbre una luz que esté a un lado
         vec3 world = vec3(v_pos.x * u_m_per_px, v_world.x, v_world.y);
         vec3 n = normalize(vec3(0.0, 0.35, 1.0));
-        color.rgb = to_srgb(to_linear(color.rgb) * light_at(world, n, 0.6));
+        vec3 lin = to_linear(color.rgb);
+        if (u_has_surface == 1) {
+            vec4 surf = texture(u_sheet_surface, v_uv);
+            float metal = surf.r, rough = max(surf.g, 0.05);
+            vec3 f0 = mix(vec3(0.04), lin, metal);
+            vec3 lit = lin * (1.0 - metal * (1.0 - METAL_DIFFUSE)) * light_at(world, n, 0.6);
+            if (metal > 0.0 || rough < 0.999)
+                lit += specular_at(world, n, u_view_dir, rough, f0) + sky_reflection(n, u_view_dir, rough, f0);
+            color.rgb = to_srgb(lit + emitted);
+        } else {
+            color.rgb = to_srgb(lin * light_at(world, n, 0.6));
+        }
+    } else if (u_shadow == 0 && u_has_surface == 1) {
+        color.rgb = to_srgb(to_linear(color.rgb) + emitted);
     }
     frag = (u_show_depth == 1 && u_shadow == 0) ? vec4(vec3(1.0 - depth), 1.0) : color;
+    glow = vec4(emitted, color.a);
 }
 """
 
@@ -160,6 +182,7 @@ def facing_indices(dx, dz, previous, directions: int = 4, hysteresis_deg: float 
     return np.where(keep, previous, np.floor(angle / sector + 0.5).astype(int) % directions)
 
 
+SHEET_SURFACE_UNIT = 7                        # capa de superficie de la hoja (unidad de textura)
 SILHOUETTE_COLOR = (0.55, 0.85, 1.0)          # azul claro: se distingue sobre el escenario
 
 
@@ -174,6 +197,7 @@ class SpriteSheet:
     rows: int = 4
     idle_col: int = 0
     walk_cycle: tuple = (1, 2, 3, 0)      # empieza por un paso, para que se note enseguida
+    surface: int = 0                      # textura de la capa de superficie (hoja.s.png), 0 = sin ella
 
     def walk_cols(self, walk_time, fps: float):
         """Versión vectorizada de ``walk_col``."""
@@ -189,9 +213,18 @@ class SpriteSheet:
 
     @classmethod
     def load(cls, path):
+        """La hoja y, si existe junto a ella, su capa de superficie (``hoja.s.png``: R metal,
+        G rugosidad, B brillo propio, A pulso; la misma disposición que la hoja)."""
+        from pathlib import Path
+        path = Path(path)
         with Image.open(path) as im:
             data = np.asarray(im.convert("RGBA"))
-        return cls(_texture(data, False), data.shape[1], data.shape[0])
+        surface = 0
+        surface_path = path.with_name(path.stem + ".s.png")
+        if surface_path.exists():
+            with Image.open(surface_path) as im:
+                surface = _texture(np.asarray(im.convert("RGBA")), False)
+        return cls(_texture(data, False), data.shape[1], data.shape[0], surface=surface)
 
     @property
     def frame_size(self):
@@ -212,7 +245,7 @@ class SpriteRenderer:
         self.u = {k: glGetUniformLocation(self.program, k) for k in (
             "u_projection", "u_sheet", "u_shadow", "u_scale", "u_closeness_range", "u_show_depth",
             "u_m_per_px", "u_cut_level", "u_cut_center", "u_cut_radius", "u_max_level",
-            "u_silhouette_color", *LIGHT_UNIFORMS,
+            "u_silhouette_color", "u_sheet_surface", "u_has_surface", *LIGHT_UNIFORMS,
             *FACADE_UNIFORMS)}
         self.vao, self.vbo = glGenVertexArrays(1), glGenBuffers(1)
         glBindVertexArray(self.vao)
@@ -273,7 +306,7 @@ class SpriteRenderer:
 
     # --- Dibujo ---
 
-    def _draw(self, verts, texture, shadow, camera, show_depth, lights, cut, max_level):
+    def _draw(self, verts, texture, shadow, camera, show_depth, lights, cut, max_level, surface=0):
         g = self.geo
         glUseProgram(self.program)
         glUniformMatrix4fv(self.u["u_projection"], 1, GL_FALSE, camera.projection().T)
@@ -297,6 +330,12 @@ class SpriteRenderer:
         if texture:
             glActiveTexture(GL_TEXTURE0)
             glBindTexture(GL_TEXTURE_2D, texture)
+        glUniform1i(self.u["u_has_surface"], int(bool(surface) and shadow == 0))
+        if surface:
+            glActiveTexture(GL_TEXTURE0 + SHEET_SURFACE_UNIT)
+            glBindTexture(GL_TEXTURE_2D, surface)
+            glUniform1i(self.u["u_sheet_surface"], SHEET_SURFACE_UNIT)
+            glActiveTexture(GL_TEXTURE0)
         glBindVertexArray(self.vao)
         glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
         glBufferData(GL_ARRAY_BUFFER, verts.nbytes, verts, GL_DYNAMIC_DRAW)
@@ -327,7 +366,7 @@ class SpriteRenderer:
         glDepthMask(GL_TRUE)
         verts = self.sprite_vertices(sheet, feet, body_h, rows, cols, tint, level)
         with timed("personajes"):
-            self._draw(verts, sheet.texture, False, camera, show_depth, lights, cut, max_level)
+            self._draw(verts, sheet.texture, False, camera, show_depth, lights, cut, max_level, sheet.surface)
 
     def draw_silhouettes(self, sheet: SpriteSheet, feet, body_h, rows, cols, camera, lights=None,
                          cut=None, max_level=1e9):
