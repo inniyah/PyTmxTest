@@ -256,7 +256,15 @@ python -m engine.compiler maps/terrain1k/terrain1k.tmx
 python -m engine.viewer maps/terrain1k/terrain1k.cworld --npcs 3000
 ```
 
-**Rendimiento del dibujo.** Las texturas del atlas se enlazan una vez por página y frame, y
+**Rendimiento del dibujo.** De lejos, el color, el albedo y las normales se leen de niveles
+reducidos del atlas (mipmaps, hasta 1/16, generados al cargar: media de los texels opacos que
+miran más hacia arriba, porque las caras verticales de un tile suelen quedar tapadas por el de
+delante y oscurecerían las aristas), con
+lecturas cercanas entre sí en lugar de saltar por todo el atlas; el mapa de posición se lee
+siempre completo, así que la profundidad y la silueta de cada píxel son exactas a cualquier
+zoom. Para eso el compilador deja un borde de 16 px alrededor de cada región del atlas (los
+mundos compilados antes, con borde de 1 px, se dibujan sin niveles reducidos). Las texturas del
+atlas se enlazan una vez por página y frame, y
 cada chunk visible cuesta dos llamadas directas a OpenGL; los personajes fuera de la vista no se
 dibujan. PyOpenGL no comprueba errores tras cada llamada (es caro); para depurar, ejecuta con
 `ENGINE_GL_DEBUG=1`. La tecla M deja de leer los mapas de albedo y normales (con la

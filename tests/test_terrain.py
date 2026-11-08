@@ -320,3 +320,89 @@ def test_per_chunk_light_lists_match_all_lights(terrain, tmp_path, spacing):
         del g
     finally:
         v.close()
+
+
+# --- Niveles reducidos del atlas (mipmaps) ------------------------------------------------
+
+def test_mip_levels_average_the_upward_opaque_texels():
+    from engine.render.world_renderer import mip_chains
+    color = np.zeros((4, 4, 4), np.uint8)
+    normal = np.zeros((4, 4, 4), np.uint8)
+    up, south = (128, 255, 128), (128, 128, 255)
+    color[0, 0], normal[0, 0, :3] = (200, 100, 0, 255), up        # cara superior
+    color[0, 1], normal[0, 1, :3] = (100, 50, 50, 255), up        # cara superior
+    color[1, 1], normal[1, 1, :3] = (10, 10, 10, 255), south      # cara sur (suele quedar tapada)
+    color[1, 0] = (255, 255, 255, 0)                              # transparente: no cuenta
+    normal[..., 3] = color[..., 3]
+    chains = mip_chains({"color": color, "normal": normal}, 2)
+    assert [lv.shape[:2] for lv in chains["color"]] == [(4, 4), (2, 2), (1, 1)]
+    assert tuple(chains["color"][1][0, 0]) == (150, 75, 25, 255)   # sin la cara sur
+    assert chains["color"][1][1, 1, 3] == 0                        # bloque sin nada opaco
+    only = mip_chains({"color": color}, 1)["color"][1][0, 0]       # sin normales: todos los opacos
+    assert tuple(only[:3]) == (103, 53, 20)
+
+
+def test_atlas_regions_are_aligned_with_wide_borders(terrain):
+    from engine.compiler.compile import ATLAS_BORDER
+    rows = SQLiteWorldStore(terrain).atlas_regions()
+    assert ATLAS_BORDER == 16
+    assert all(b == ATLAS_BORDER and x % ATLAS_BORDER == 0 and y % ATLAS_BORDER == 0 for _r, _p, x, y, _w, _h, b in rows)
+
+
+def _gl_or_skip():
+    glfw = pytest.importorskip("glfw")
+    if not glfw.init():
+        pytest.skip("sin pantalla para OpenGL")
+    glfw.window_hint(glfw.VISIBLE, 0)
+    probe = glfw.create_window(16, 16, "sonda", None, None)
+    if not probe:
+        glfw.terminate()
+        pytest.skip("no se puede crear una ventana OpenGL")
+    glfw.destroy_window(probe)
+
+
+@pytest.mark.parametrize("zoom", [1.0, 0.3, 0.1])
+def test_mipmaps_never_change_the_depth(terrain, tmp_path, zoom):
+    """La posición se lee siempre del atlas completo: con o sin niveles reducidos, la profundidad
+    (y la silueta) de cada píxel es idéntica; solo cambia el color, y solo de lejos."""
+    _gl_or_skip()
+    from PIL import Image
+
+    from engine.viewer import Viewer
+    v = Viewer(terrain, 480, 320, visible=False, spawn=(64, 64), npcs=0)
+    try:
+        v.camera.zoom = zoom
+        v._center_on_player(1.0)
+        assert v.renderer.atlas.levels == 4
+
+        def shot(mips, depth):
+            v.renderer.use_mipmaps, v.renderer.show_depth = mips, depth
+            v.screenshot(tmp_path / "s.png")
+            return np.asarray(Image.open(tmp_path / "s.png").convert("RGB")).astype(int)
+        assert np.array_equal(shot(True, True), shot(False, True))
+        with_mips, without = shot(True, False), shot(False, False)
+        colour = np.abs(with_mips - without).mean()
+        assert colour == 0 if zoom >= 0.5 else colour < 3
+        # Ninguna fila de pantalla se oscurece de forma sistemática (trazos a lo largo de las filas
+        # de tiles, por meter en las aristas el color de caras que quedan tapadas)
+        rows = (with_mips.sum(-1) - without.sum(-1)).mean(axis=1)
+        assert rows.min() > -6
+    finally:
+        v.close()
+
+
+def test_worlds_with_narrow_borders_load_without_mipmaps(tmp_path, shared_tileset, monkeypatch):
+    _gl_or_skip()
+    import engine.compiler.compile as comp
+    monkeypatch.setattr(comp, "ATLAS_BORDER", 1)
+    build_terrain(tmp_path / "t.tmx", shared_tileset, 32, 32, houses=1, seed=2)
+    assert compile_tmx(tmp_path / "t.tmx", tmp_path / "t.cworld").ok
+    from engine.viewer import Viewer
+    v = Viewer(tmp_path / "t.cworld", 320, 200, visible=False, spawn=(16, 16), npcs=0)
+    try:
+        assert v.renderer.atlas.levels == 0
+        v.camera.zoom = 0.1
+        assert v.renderer.lod(v.camera) == 0
+        v.frame()
+    finally:
+        v.close()

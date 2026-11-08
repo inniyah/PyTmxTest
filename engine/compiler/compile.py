@@ -42,7 +42,11 @@ COMPILER_VERSION = "0.1"
 GID_MASK, FLIP_H_BIT, FLIP_OTHER_BITS = 0x0FFFFFFF, 0x80000000, 0x70000000
 SPEC_KEYS = {"walls", "fill", "floor", "floor_part", "ceiling", "ceiling_part", "flags"}
 ATLAS_MAX = 4096
-ATLAS_BORDER = 1
+# Borde de cada región del atlas (píxeles del borde replicados) y alineación de las regiones:
+# 2^MIP_LEVELS, para que los niveles reducidos (mipmaps) hasta 1/2^MIP_LEVELS no mezclen tiles
+# vecinos y cada región empiece en un texel exacto en todos los niveles.
+MIP_LEVELS = 4
+ATLAS_BORDER = 1 << MIP_LEVELS
 MAX_LISTED = 20          # posiciones listadas por cada error en el informe
 
 
@@ -203,8 +207,14 @@ def build_atlas(tmx: tm.TiledMap, tmx_path: Path, used_gids: np.ndarray, report:
         report.warnings.append(f"GIDs sin imagen (no se dibujan): {missing[:MAX_LISTED]}")
 
     b = ATLAS_BORDER
-    sizes = [(images[g].width + 2 * b, images[g].height + 2 * b) for g in gids]
+
+    def aligned(n):
+        return -(-n // b) * b
+    sizes = [(aligned(images[g].width + 2 * b), aligned(images[g].height + 2 * b)) for g in gids]
     placements, page_sizes = pack_shelves(sizes, ATLAS_MAX) if gids else ([], [])
+    page_sizes = [(aligned(w), aligned(h)) for w, h in page_sizes]
+    if any(pl.x % b or pl.y % b for pl in placements):
+        raise AssertionError("Regiones del atlas sin alinear: los niveles reducidos mezclarían tiles")
     kinds = ["color"] + [k for k in ("normal", "position", "albedo")
                          if gids and all(k in extras.get(g, {}) for g in gids)]
 
@@ -214,7 +224,9 @@ def build_atlas(tmx: tm.TiledMap, tmx_path: Path, used_gids: np.ndarray, report:
         canvases = [np.zeros((h, w, 4), dtype) for w, h in page_sizes]
         for g, pl in zip(gids, placements):
             src = np.asarray(images[g].convert("RGBA")) if kind == "color" else extras[g][kind]
-            tile = np.pad(src, ((b, b), (b, b), (0, 0)), mode="edge")
+            h0, w0 = src.shape[:2]
+            extra_h, extra_w = aligned(h0 + 2 * b) - (h0 + 2 * b), aligned(w0 + 2 * b) - (w0 + 2 * b)
+            tile = np.pad(src, ((b, b + extra_h), (b, b + extra_w), (0, 0)), mode="edge")
             canvases[pl.page][pl.y:pl.y + tile.shape[0], pl.x:pl.x + tile.shape[1]] = tile
         for page, canvas in enumerate(canvases):
             if kind == "position":
@@ -226,9 +238,9 @@ def build_atlas(tmx: tm.TiledMap, tmx_path: Path, used_gids: np.ndarray, report:
 
     table = np.zeros(max([0] + [int(g) for g in used_gids]) + 1, np.uint32)
     rows = []
-    for rid, (g, pl, (w, h)) in enumerate(zip(gids, placements, sizes), start=1):
+    for rid, (g, pl) in enumerate(zip(gids, placements), start=1):
         table[g] = rid
-        rows.append((rid, pl.page, pl.x + b, pl.y + b, w - 2 * b, h - 2 * b, b))
+        rows.append((rid, pl.page, pl.x + b, pl.y + b, images[g].width, images[g].height, b))
     return table, rows, pages
 
 

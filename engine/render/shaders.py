@@ -120,6 +120,7 @@ uniform vec2 u_cut_center;        // ...dentro de este círculo (píxeles de mun
 uniform float u_cut_radius;       // ...de este radio; negativo = en todo el mapa
 uniform sampler2D u_albedo;       // color sin luz (si el atlas lo tiene)
 uniform sampler2D u_normal;
+uniform float u_lod;              // nivel reducido del color, albedo y normales según el zoom
 uniform int u_has_albedo;
 uniform int u_has_normal;
 uniform float u_cell_w;
@@ -127,13 +128,22 @@ uniform float u_cell_w;
 out vec4 frag;
 
 void main() {
-    vec4 color = texture(u_color, v_uv);
-    float alpha = color.a * v_alpha;
-    if (alpha < 0.01) discard;
+    // Posición del atlas completo: profundidad y silueta exactas de cada píxel. El color, del
+    // nivel reducido (de lejos, una media limpia en lugar de un texel suelto)
+    // El texel del atlas completo se calcula aquí, con enteros, y el del nivel reducido es
+    // (texel >> nivel): así lo contiene siempre. Con dos muestreos independientes de la GPU, en
+    // una frontera exacta entre texels cada uno podía redondear hacia un lado (trazos oscuros).
+    ivec2 texel = ivec2(floor(v_uv * vec2(textureSize(u_position, 0))));
+    int lod = int(u_lod);
+    ivec2 texel_lod = texel >> lod;
+    vec4 position = texelFetch(u_position, texel, 0);
+    if (position.a < 0.5) discard;
+    vec4 color = texelFetch(u_color, texel_lod, lod);
+    float alpha = v_alpha;
     if (v_origin.y > u_max_y) discard;
     if (v_origin.y > u_cut_y && (u_cut_radius < 0.0 || distance(v_pos, u_cut_center) < u_cut_radius))
         discard;
-    vec3 local = u_pos_min + texture(u_position, v_uv).rgb * (u_pos_max - u_pos_min);
+    vec3 local = u_pos_min + position.rgb * (u_pos_max - u_pos_min);
     float height = v_origin.y + local.y;
     float sz = u_scale.x, sy = u_scale.y;
     float closeness = height * (sz + sy * sy / sz) + v_screen_y * sy / sz
@@ -143,10 +153,10 @@ void main() {
     gl_FragDepth = depth;
     vec3 rgb = color.rgb;
     if (u_lighting == 1) {
-        vec3 base = (u_has_albedo == 1) ? texture(u_albedo, v_uv).rgb : color.rgb;
+        vec3 base = (u_has_albedo == 1) ? texelFetch(u_albedo, texel_lod, lod).rgb : color.rgb;
         vec3 n = vec3(0.0, 1.0, 0.0);
         if (u_has_normal == 1) {
-            n = texture(u_normal, v_uv).rgb * 2.0 - 1.0;
+            n = texelFetch(u_normal, texel_lod, lod).rgb * 2.0 - 1.0;
             if (v_flip > 0.5) n.x = -n.x;          // tile volteado: la normal también
             n = normalize(n);
         }

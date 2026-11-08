@@ -26,7 +26,10 @@ from OpenGL.GL import (
     glUniform1f, glUniform1i, glUniform2f, glUniform3f, glUniformMatrix4fv, glUseProgram,
     glVertexAttribPointer, glViewport,
 )
-from OpenGL.GL import GL_ONE, GL_RGBA32F, glBlendFuncSeparate, glTexSubImage2D
+from OpenGL.GL import (
+    GL_NEAREST_MIPMAP_NEAREST, GL_ONE, GL_RGBA32F, GL_TEXTURE_BASE_LEVEL, GL_TEXTURE_MAX_LEVEL,
+    glBlendFuncSeparate, glTexSubImage2D,
+)
 from OpenGL.raw.GL.VERSION.GL_1_1 import glDrawElements as _raw_draw_elements
 from OpenGL.raw.GL.VERSION.GL_2_0 import glUniform1i as _raw_uniform1i
 from OpenGL.raw.GL.VERSION.GL_2_0 import glUniform1iv as _raw_uniform1iv
@@ -99,35 +102,105 @@ class Camera:
         self.x, self.y = wx - sx / self.zoom, wy - sy / self.zoom
 
 
-def _texture(data: np.ndarray, sixteen_bits: bool):
+MAX_MIP_LEVELS = 4
+
+
+def _texture(levels, sixteen_bits: bool):
+    """Textura con sus niveles (el 0, completo, y los reducidos), muestreo sin interpolar."""
+    levels = levels if isinstance(levels, list) else [levels]
     tex = glGenTextures(1)
     glBindTexture(GL_TEXTURE_2D, tex)
-    for p, v in ((GL_TEXTURE_MIN_FILTER, GL_NEAREST), (GL_TEXTURE_MAG_FILTER, GL_NEAREST),
-                 (GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE), (GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)):
+    min_filter = GL_NEAREST_MIPMAP_NEAREST if len(levels) > 1 else GL_NEAREST
+    for p, v in ((GL_TEXTURE_MIN_FILTER, min_filter), (GL_TEXTURE_MAG_FILTER, GL_NEAREST),
+                 (GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE), (GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE),
+                 (GL_TEXTURE_BASE_LEVEL, 0), (GL_TEXTURE_MAX_LEVEL, len(levels) - 1)):
         glTexParameteri(GL_TEXTURE_2D, p, v)
-    h, w = data.shape[:2]
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16 if sixteen_bits else GL_RGBA8, w, h, 0, GL_RGBA,
-                 GL_UNSIGNED_SHORT if sixteen_bits else GL_UNSIGNED_BYTE, np.ascontiguousarray(data))
+    for i, data in enumerate(levels):
+        h, w = data.shape[:2]
+        glTexImage2D(GL_TEXTURE_2D, i, GL_RGBA16 if sixteen_bits else GL_RGBA8, w, h, 0, GL_RGBA,
+                     GL_UNSIGNED_SHORT if sixteen_bits else GL_UNSIGNED_BYTE, np.ascontiguousarray(data))
     return tex
 
 
+UP_TOLERANCE = 0.15
+
+
+def mip_chains(maps: Dict[str, np.ndarray], levels: int) -> Dict[str, list]:
+    """Niveles reducidos (a la mitad cada vez) del color, el albedo y las normales de una página.
+
+    Cada texel reducido promedia los texels opacos de su bloque de 2 × 2 que miran más hacia
+    arriba (componente vertical de la normal dentro de UP_TOLERANCE de la mayor del bloque). En
+    esta vista oblicua, las caras verticales de un tile suelen quedar tapadas por el tile de
+    delante (por ejemplo, la cara sur de un tile de terreno con base elevada), y las superiores
+    casi siempre se ven: un promedio de todo el bloque, o tomar cualquiera de sus texels, mete
+    el color de una cara oculta en la arista visible y la oscurece (trazos a lo largo de las
+    filas de tiles). Sin mapa de normales, se promedian todos los opacos. Las normales,
+    renormalizadas. El mapa de posición no tiene niveles: de él salen la profundidad y la
+    silueta exactas de cada píxel. El shader lee el texel reducido como (texel completo >> nivel):
+    un píxel opaco cae siempre en un bloque que lo contiene, así que nunca lee uno vacío."""
+    out = {k: [v] for k, v in maps.items() if k in ("color", "albedo", "normal")}
+
+    def corners(x):
+        return (x[0::2, 0::2], x[1::2, 0::2], x[0::2, 1::2], x[1::2, 1::2])
+    for _ in range(levels):
+        base = out["color"][-1]
+        h, w = base.shape[0] // 2, base.shape[1] // 2
+        if h == 0 or w == 0:
+            break
+        opaque = [c > 0 for c in corners(base[:2 * h, :2 * w, 3])]
+        if "normal" in out:
+            ny = [c.astype(np.float32) / 255.0 * 2.0 - 1.0 for c in corners(out["normal"][-1][:2 * h, :2 * w, 1])]
+            top = np.maximum.reduce([np.where(o, y, -9.0) for o, y in zip(opaque, ny)])
+            weight = [(o & (y >= top - UP_TOLERANCE)).astype(np.float32) for o, y in zip(opaque, ny)]
+        else:
+            weight = [o.astype(np.float32) for o in opaque]
+        total = weight[0] + weight[1] + weight[2] + weight[3]
+        any_opaque = total > 0
+        for kind, chain in out.items():
+            parts = corners(chain[-1][:2 * h, :2 * w, :3].astype(np.float32))
+            if kind == "normal":
+                parts = [p / 255.0 * 2.0 - 1.0 for p in parts]
+            mean = sum(p * wgt[..., None] for p, wgt in zip(parts, weight)) / np.maximum(total, 1.0)[..., None]
+            if kind == "normal":
+                mean = mean / np.maximum(np.linalg.norm(mean, axis=-1, keepdims=True), 1e-6)
+                mean = (mean + 1.0) / 2.0 * 255.0
+            level = np.empty((h, w, 4), np.uint8)
+            level[..., :3] = np.clip(np.rint(mean), 0, 255)
+            level[..., 3] = np.where(any_opaque, 255, 0)
+            chain.append(level)
+    return out
+
+
 class GpuAtlas:
-    """Páginas del atlas en la GPU: color y posición (siempre); albedo y normales (si las hay)."""
+    """Páginas del atlas en la GPU: color y posición (siempre); albedo y normales (si las hay).
+
+    Con regiones de borde suficiente (2^n píxeles), el color, el albedo y las normales llevan n
+    niveles reducidos para leer de lejos sin saltar por todo el atlas; el mapa de posición, nunca
+    (profundidad y silueta exactas). Con borde 1 (mundos antiguos), sin niveles."""
 
     def __init__(self, store, layout: AtlasLayout):
         self.color, self.position, self.albedo, self.normal = {}, {}, {}, {}
+        borders = [int(r[6]) for r in store.atlas_regions()] or [1]
+        self.levels = min(MAX_MIP_LEVELS, int(np.floor(np.log2(max(1, min(borders))))))
         for page in layout.page_sizes:
+            maps = {}
             with Image.open(io.BytesIO(store.atlas_page(page, "color"))) as im:
-                self.color[page] = _texture(np.asarray(im.convert("RGBA")), False)
+                maps["color"] = np.asarray(im.convert("RGBA"))
             raw = store.atlas_page(page, "position")
             if raw is None:
                 raise ValueError("El mundo no tiene mapa de posición: hace falta para la profundidad por píxel")
-            self.position[page] = _texture(png16.decode_rgba16(raw), True)
-            for kind, dest in (("albedo", self.albedo), ("normal", self.normal)):
+            maps["position"] = png16.decode_rgba16(raw)
+            for kind in ("albedo", "normal"):
                 raw = store.atlas_page(page, kind)
                 if raw is not None:
                     with Image.open(io.BytesIO(raw)) as im:
-                        dest[page] = _texture(np.asarray(im.convert("RGBA")), False)
+                        maps[kind] = np.asarray(im.convert("RGBA"))
+            chains = mip_chains(maps, self.levels)
+            self.color[page] = _texture(chains["color"], False)
+            self.position[page] = _texture(maps["position"], True)          # siempre completo
+            for kind, dest in (("albedo", self.albedo), ("normal", self.normal)):
+                if kind in chains:
+                    dest[page] = _texture(chains[kind], False)
 
     def delete(self):
         glDeleteTextures([t for d in (self.color, self.position, self.albedo, self.normal) for t in d.values()])
@@ -192,6 +265,7 @@ class WorldRenderer:
         self.chunk_lights = {}
         self.per_chunk_lights = True   # False: cada tile recorre todas las luces de la vista (depurar)
         self.use_material_maps = True  # False: sin leer albedo ni normales (diagnóstico, tecla M)
+        self.use_mipmaps = True        # False: leer siempre el atlas completo (comparar)
 
         self.program = compileProgram(compileShader(TILE_VERTEX, GL_VERTEX_SHADER),
                                       compileShader(TILE_FRAGMENT, GL_FRAGMENT_SHADER))
@@ -199,7 +273,7 @@ class WorldRenderer:
             "u_projection", "u_color", "u_position", "u_pos_min", "u_pos_max", "u_scale",
             "u_closeness_range", "u_max_y", "u_show_depth", "u_level_bias", "u_cell_h",
             "u_height_tint", "u_cut_y", "u_cut_center", "u_cut_radius", "u_albedo", "u_normal",
-            "u_has_albedo", "u_has_normal", "u_cell_w", *LIGHT_UNIFORMS)}
+            "u_has_albedo", "u_has_normal", "u_cell_w", "u_lod", *LIGHT_UNIFORMS)}
 
     # --- Qué chunks se ven ---
 
@@ -263,6 +337,7 @@ class WorldRenderer:
         glUniform1f(self.u["u_cut_y"], cut_y)
         glUniform2f(self.u["u_cut_center"], *self.cut_center)
         glUniform1f(self.u["u_cut_radius"], self.cut_radius)
+        glUniform1f(self.u["u_lod"], self.lod(camera))
         glUniform1i(self.u["u_albedo"], 2)
         glUniform1i(self.u["u_normal"], 3)
         glUniform1f(self.u["u_cell_w"], g.cell_w)
@@ -341,6 +416,12 @@ class WorldRenderer:
             order = np.argsort((sx - (l + r) / 2) ** 2 + (sy - (t + b) / 2) ** 2)
             lights = lights[order[:MAX_LIGHTS]]
         return lights
+
+    def lod(self, camera: Camera) -> float:
+        """Nivel del atlas que se lee a este zoom: el que da como mucho dos texels por píxel."""
+        if not self.use_mipmaps or self.atlas.levels == 0 or camera.zoom >= 0.5:
+            return 0.0
+        return float(min(self.atlas.levels, int(np.floor(np.log2(1.0 / camera.zoom)))))
 
     def chunk_light_lists(self, keys, lights: np.ndarray) -> dict:
         """Para cada chunk, las luces (índices en ``lights``) cuyo radio alcanza su caja en planta.
