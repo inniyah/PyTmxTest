@@ -240,6 +240,21 @@ miran delante para no caerse por un borde ni chocar con algo alto, y giran si se
 Todos se dibujan en dos llamadas (sombras y sprites). Coste por paso de 60 Hz, con física,
 contactos y comportamiento: ≈ 1.8 ms con 50 personajes, ≈ 3.4 ms con 150.
 
+**Mundo grande.** `tools/pieces/terrain.py` genera un terreno de alturas en las esquinas (tipo
+Populous: dos esquinas vecinas difieren como mucho en ¼ de planta) y lo convierte en piezas:
+cada casilla es una pieza entera o dos mitades partidas por una diagonal, y la superficie
+reproduce el terreno exactamente. Encima, casas de dos plantas en solares aplanados. Un
+kilómetro cuadrado se genera en ≈ 1.5 s y se compila en ≈ 10 s (4.5 MB). La simulación usa
+niveles de detalle alrededor del jugador (completa a menos de 60 m, a 30 Hz hasta 160 m,
+congelada más lejos) y el visor descarga los chunks lejanos: 3000 personajes repartidos por
+1 km² cuestan ≈ 4 ms por paso.
+
+```bash
+python -m tools.pieces --terrain-size 512 --terrain maps/terrain1k/terrain1k.tmx
+python -m engine.compiler maps/terrain1k/terrain1k.tmx
+python -m engine.viewer maps/terrain1k/terrain1k.cworld --npcs 3000
+```
+
 **Ocultar lo que hay encima.** Cuando el personaje tiene algo por encima de su planta en su
 celda o en las de alrededor (un forjado, un puente), se deja de dibujar lo que está por encima
 de su planta: en un círculo a su alrededor o en todo el mapa (tecla C). La detección es
@@ -251,7 +266,7 @@ Opciones útiles: `--spawn X Y` (celda de aparición) y `--spawn-level N` (su pl
 
 ## Piezas de prueba (formato de celda de 32 bits)
 
-`tools/pieces` genera, a partir de un catálogo de 106 piezas, todo lo necesario para
+`tools/pieces` genera, a partir de un catálogo de 218 piezas, todo lo necesario para
 probar el formato de celda nuevo (paredes, rellenos, suelos, rampas y techos bajos):
 
 ```bash
@@ -269,6 +284,7 @@ python -m tools.pieces          # ~2 s
 | `maps/gallery/gallery.tmx` | Galería con cada pieza en su celda y su nombre debajo |
 | `maps/course/course.tmx` | Recorrido en tres plantas: plataforma con escalera, habitación, muro diagonal, túnel, terraza con rampa ancha y torre |
 | `maps/levels/levels.tmx` | Dos niveles con aire debajo: puente, edificio de dos plantas con escalera interior y agujero, balcón |
+| `maps/terrain/terrain.tmx` | Terreno tipo Populous de 512 × 512 m con casas de dos plantas y farolas (`--terrain-size 512` para 1 km) |
 
 Proyección (como los mapas existentes): celdas de 2 × 2 × 3 m, tiles de 128 px de ancho,
 filas de 92 px y 133 px por planta. Las propiedades de cada tile (`walls`, `fill`, `floor`,

@@ -184,7 +184,7 @@ _MIRROR_DIR = {"E": "W", "W": "E", "NE": "NW", "NW": "NE", "SE": "SW", "SW": "SE
 
 def _mirror_floor(name: str) -> str:
     parts = name.split()
-    if parts[0] == "ramp":
+    if parts[0] in ("ramp", "slope"):
         parts[1] = _MIRROR_DIR.get(parts[1], parts[1])
     return " ".join(parts)
 

@@ -28,7 +28,8 @@ class WorldView:
         self.store = store
         meta = store.meta()
         if meta.get("format_version") != FORMAT_VERSION:
-            raise ValueError(f"Formato {meta.get('format_version')}, se esperaba {FORMAT_VERSION}")
+            raise ValueError(f"Mundo compilado con el formato {meta.get('format_version')}; este motor usa el "
+                             f"{FORMAT_VERSION}: vuelve a compilarlo (python -m engine.compiler)")
         self.meta = meta
         self.chunk_size = n = int(meta["chunk_size"])
         self.shift = n.bit_length() - 1                          # potencia de dos

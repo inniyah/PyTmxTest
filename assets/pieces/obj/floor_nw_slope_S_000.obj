@@ -1,0 +1,17 @@
+# Pieza floor_nw_slope_S_000: metros, X este, Y arriba, Z sur
+mtllib pieces.mtl
+o floor_nw_slope_S_000
+v 0 0 0
+v 0 0.75 2
+v 2 0 0
+v 0 0 2
+vn 0.000000 0.936329 -0.351123
+vn 0.000000 -1.000000 0.000000
+vn -1.000000 0.000000 0.000000
+vn 0.707107 0.000000 0.707107
+g floor
+usemtl floor
+f 1//1 2//1 3//1
+f 3//2 4//2 1//2
+f 4//3 2//3 1//3
+f 4//4 3//4 2//4

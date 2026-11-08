@@ -20,7 +20,7 @@ def faces_of(spec):
 
 
 def test_catalog():
-    assert len(CATALOG) == 106
+    assert len(CATALOG) == 218
     assert {p.layer for p in CATALOG} == {"floor", "object", "overhead"}
 
 

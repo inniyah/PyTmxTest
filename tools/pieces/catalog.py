@@ -26,26 +26,30 @@ def _h(x: float) -> str:
 def build_catalog() -> List[Piece]:
     pieces: List[Piece] = []
 
-    # Suelos de celda entera: planos y las 24 rampas
+    # Suelos de celda entera: planos, rampas rectas (escaleras), diagonales y pendientes suaves
     for name in C.FLOOR_NAMES[1:]:
         kind, *rest = name.split()
-        tag = f"flat_{_h(float(rest[0]))}" if kind == "flat" else f"ramp_{rest[0]}_{_h(float(rest[1]))}"
-        category = "suelos" if kind == "flat" else ("rampas rectas" if len(rest[0]) == 1 else "rampas diagonales")
+        if kind == "flat":
+            tag, category = f"flat_{_h(float(rest[0]))}", "suelos"
+        else:
+            tag = f"{kind}_{rest[0]}_{_h(float(rest[1]))}"
+            category = ("pendientes suaves" if kind == "slope" else
+                        "rampas rectas" if len(rest[0]) == 1 else "rampas diagonales")
         pieces.append(Piece(f"floor_{tag}", category, "floor", CellSpec(floors={"all": name})))
 
-    # Medios suelos planos, en las cuatro mitades
+    # Medias celdas, en las cuatro mitades: planos, diagonales y pendientes suaves (para partir
+    # cualquier casilla de un terreno por cualquiera de las dos diagonales)
     for part in ("nw", "se", "ne", "sw"):
         for h in (0.0, 0.25, 0.5, 0.75):
             pieces.append(Piece(f"floor_{part}_flat_{_h(h)}", "medios suelos", "floor",
                                 CellSpec(floors={part: f"flat {h:g}"})))
-
-    # Medias rampas diagonales: las mitades paralelas a la rampa (bordes de escaleras diagonales)
-    for direction, parts in (("NE", ("nw", "se")), ("SW", ("nw", "se")),
-                             ("NW", ("ne", "sw")), ("SE", ("ne", "sw"))):
-        for part in parts:
-            for base in (0.0, 0.25, 0.5, 0.75):
-                pieces.append(Piece(f"floor_{part}_ramp_{direction}_{_h(base)}", "medias rampas", "floor",
-                                    CellSpec(floors={part: f"ramp {direction} {base:g}"})))
+    for part in ("nw", "se", "ne", "sw"):
+        for kind, dirs, category in (("ramp", ("NE", "SE", "SW", "NW"), "medias rampas"),
+                                     ("slope", ("N", "S", "E", "W"), "medias pendientes")):
+            for direction in dirs:
+                for base in (0.0, 0.25, 0.5, 0.75):
+                    pieces.append(Piece(f"floor_{part}_{kind}_{direction}_{_h(base)}", category, "floor",
+                                        CellSpec(floors={part: f"{kind} {direction} {base:g}"})))
 
     # Paredes finas en bordes y esquinas
     for walls in ("N", "E", "S", "W", "NE", "ES", "SW", "WN"):

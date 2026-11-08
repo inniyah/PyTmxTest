@@ -136,14 +136,36 @@ def transfer_walls(values: np.ndarray, south: np.ndarray, east: np.ndarray) -> n
     return values          # las del borde del mapa caen fuera: fuera ya es macizo
 
 
+# Puntos dentro de cada mitad (diagonal, mitad): cerca de sus tres esquinas y en el centro
+_HALF_SAMPLES = {
+    (0, 1): [(0.12, 0.12), (0.76, 0.12), (0.12, 0.76), (0.3, 0.3)],    # "/" mitad NO
+    (0, 2): [(0.88, 0.88), (0.88, 0.24), (0.24, 0.88), (0.7, 0.7)],    # "/" mitad SE
+    (1, 1): [(0.88, 0.12), (0.24, 0.12), (0.88, 0.76), (0.7, 0.3)],    # "\\" mitad NE
+    (1, 2): [(0.12, 0.88), (0.12, 0.24), (0.76, 0.88), (0.3, 0.7)],    # "\\" mitad SO
+}
+
+
 def check_overflow(world: World, obstacles: np.ndarray, report: Report):
-    """Una rampa que sobresale de su celda necesita la celda de arriba libre de geometría."""
-    top = np.fmax(C.FLOOR_MAX[C.floor_code(obstacles, 1)], C.FLOOR_MAX[C.floor_code(obstacles, 2)])
-    overflow = np.nan_to_num(top) > 1.0
-    blocked = np.zeros_like(overflow)
-    blocked[:-1] = overflow[:-1] & ((obstacles[1:] & C.GEOMETRY_MASK) != 0)
+    """Una mitad cuyo suelo sobresale de su celda necesita libre esa zona de la celda de arriba
+    (lo que haya en la otra mitad no estorba)."""
+    blocked = np.zeros(obstacles.shape, bool)
+    split = C.split(obstacles).astype(int)
+    for half in (1, 2):
+        over = np.nan_to_num(C.FLOOR_MAX[C.floor_code(obstacles, half)]) > 1.0
+        over[-1] = False                                   # la planta más alta no tiene celda encima
+        if not over.any():
+            continue
+        z, y, x = np.nonzero(over)
+        above = obstacles[z + 1, y, x]
+        hit = np.zeros(len(z), bool)
+        for s_val in (0, 1):
+            sel = split[z, y, x] == s_val
+            for u, v in _HALF_SAMPLES[(s_val, half)]:
+                occupied = np.isfinite(C.surface_at(above[sel], u, v)) | C.fill_contains(C.fill(above[sel]), u, v)
+                hit[sel] |= occupied
+        blocked[z[hit], y[hit], x[hit]] = True
     if blocked.any():
-        report.warnings.append("Rampa que sobresale de su celda con la celda de arriba ocupada: "
+        report.warnings.append("Suelo que sobresale de su celda con esa zona de la celda de arriba ocupada: "
                                + _positions(blocked, world))
 
 

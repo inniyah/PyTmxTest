@@ -146,7 +146,8 @@ def mesh_for(spec: CellSpec, size: CellSize = DEFAULT_CELL) -> Mesh:
         code = C.FLOOR[name]
         if code == C.FLOOR_NONE:
             continue
-        material = "ramp" if name.startswith("ramp") else "floor"
+        # Naranja solo las escaleras (rampas rectas empinadas); el resto es terreno
+        material = "ramp" if name.split()[0] == "ramp" and len(name.split()[1]) == 1 else "floor"
         faces += _orient_outwards(_prism(REGIONS[part], zero, _plane(code), material, size))
 
     for part, h in spec.ceilings.items():

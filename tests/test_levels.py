@@ -6,16 +6,15 @@ from engine.compiler import compile_tmx
 from engine.physics import WalkerPhysics, Walkers
 from engine.world.store import SQLiteWorldStore
 from engine.world.view import WorldView
-from tools.pieces.build import build_tileset
 from tools.pieces.levels import build_levels
 
 CW = 2.0
 
 
 @pytest.fixture(scope="module")
-def world(tmp_path_factory):
+def world(tmp_path_factory, shared_tileset):
     out = tmp_path_factory.mktemp("levels")
-    tsx = build_tileset(out / "assets")
+    tsx = shared_tileset
     build_levels(out / "levels.tmx", tsx)
     report = compile_tmx(out / "levels.tmx", out / "levels.cworld")
     assert report.ok and not report.warnings, report.summary()

@@ -15,9 +15,10 @@ def h(name, u, v):
 
 
 def test_field_layout():
-    assert C.GEOMETRY_MASK == 0xFFFFF
+    assert C.GEOMETRY_MASK == (1 << 22) - 1
     assert len(C.FILLS) == 8                       # los 3 bits de relleno, completos
-    assert len(C.FLOOR_NAMES) == 29 and C.FLOOR_NONE == 0
+    assert len(C.FLOOR_NAMES) == 45 and C.FLOOR_NONE == 0
+    assert C.FLOOR_NAMES[:29][-1] == "ramp NW 0.75"       # los códigos antiguos no cambian
     assert CellSpec().encode() == 0                # celda vacía = 0
 
 
@@ -114,3 +115,22 @@ def test_every_encoding_decodes_back():
         assert C.FILLS[int(C.fill(v))] == fill
         assert C.FLOOR_NAMES[int(C.floor_code(v, 1))] == floor == C.FLOOR_NAMES[int(C.floor_code(v, 2))]
         assert C.CEILING_HEIGHTS[int(C.ceiling_code(v, 1))] == ceiling
+
+
+@pytest.mark.parametrize("d", ["N", "S", "E", "W"])
+def test_gentle_slopes_rise_a_quarter_and_chain(d):
+    lo, hi = f"slope {d} 0", f"slope {d} 0.25"
+    assert C.floor_range(C.FLOOR[lo]) == (0.0, 0.25)
+    exit_edge = {"N": (EDGE, 0), "S": (EDGE, 1), "E": (1, EDGE), "W": (0, EDGE)}[d]
+    entry_edge = {"N": (EDGE, 1), "S": (EDGE, 0), "E": (0, EDGE), "W": (1, EDGE)}[d]
+    assert np.allclose(h(lo, *exit_edge), h(hi, *entry_edge))
+
+
+def test_gentle_slopes_mirror():
+    assert CellSpec(floors={"nw": "slope E 0.5"}).mirrored() == CellSpec(floors={"ne": "slope W 0.5"})
+    uv = np.random.default_rng(1).random((50, 2))
+    for d in "NSEW":
+        name = f"slope {d} 0.25"
+        m = CellSpec(floors={"all": name}).mirrored().floors["all"]
+        assert np.allclose(C.floor_height(C.FLOOR[name], uv[:, 0], uv[:, 1]),
+                           C.floor_height(C.FLOOR[m], 1 - uv[:, 0], uv[:, 1]))

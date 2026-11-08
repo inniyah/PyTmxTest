@@ -41,7 +41,9 @@ def build_tileset(out: Path, proj: Projection = DEFAULT_PROJECTION, pieces: List
     for i, piece in enumerate(pieces):
         obj_path = obj_dir / f"{piece.name}.obj"
         write_obj(obj_path, mesh_for(piece.spec, proj.cell), piece.name)
-        c, n, p, a = render(read_obj(obj_path), proj, with_albedo=True)     # el tile sale del .obj
+        stairs = piece.category == "rampas rectas"
+        c, n, p, a = render(read_obj(obj_path), proj, with_albedo=True,      # el tile sale del .obj
+                            outline=piece.layer != "floor" or stairs)
         r, col = divmod(i, COLUMNS)
         sl = (slice(r * th, (r + 1) * th), slice(col * tw, (col + 1) * tw))
         color[sl], normal[sl], position[sl], albedo[sl] = c, n, p, a

@@ -4,11 +4,11 @@
     bit  1      pared en el borde oeste          (sur y este son N/O de la vecina)
     bits 2-4    relleno: vacío, macizo, 4 medias diagonales macizas, 2 diagonales finas
     bit  5      diagonal que divide la celda: 0 = "/" (SO-NE), 1 = "\\" (NO-SE)
-    bits 6-10   suelo de la mitad 1
-    bits 11-15  suelo de la mitad 2
-    bits 16-17  techo bajo de la mitad 1
-    bits 18-19  techo bajo de la mitad 2
-    bits 20-31  comportamiento: material (20-23) y flags (24-31)
+    bits 6-11   suelo de la mitad 1
+    bits 12-17  suelo de la mitad 2
+    bits 18-19  techo bajo de la mitad 1
+    bits 20-21  techo bajo de la mitad 2
+    bits 22-31  comportamiento: material (22-25) y flags (26-31)
 
 Coordenadas dentro de la celda: u de 0 (oeste) a 1 (este), v de 0 (norte) a 1 (sur).
 Alturas en plantas: 0 = suelo de la celda, 1 = su techo.
@@ -29,15 +29,15 @@ WALL_N = 1 << 0
 WALL_W = 1 << 1
 FILL_SHIFT, FILL_MASK = 2, 0b111 << 2
 SPLIT_BIT = 1 << 5
-FLOOR1_SHIFT, FLOOR2_SHIFT, FLOOR_MASK = 6, 11, 0b11111
-CEIL1_SHIFT, CEIL2_SHIFT, CEIL_MASK = 16, 18, 0b11
-MATERIAL_SHIFT, MATERIAL_MASK = 20, 0b1111
-FLAGS_SHIFT, FLAGS_MASK = 24, 0xFF
-GEOMETRY_MASK = (1 << 20) - 1
+FLOOR1_SHIFT, FLOOR2_SHIFT, FLOOR_MASK = 6, 12, 0b111111
+CEIL1_SHIFT, CEIL2_SHIFT, CEIL_MASK = 18, 20, 0b11
+MATERIAL_SHIFT, MATERIAL_MASK = 22, 0b1111
+FLAGS_SHIFT, FLAGS_MASK = 26, 0b111111
+GEOMETRY_MASK = (1 << 22) - 1
 
-# Flags de comportamiento (bits 24-31)
-FLAG_ACTIVE = 1 << 24       # celda activa: tiene una entrada en la tabla de eventos
-FLAG_LADDER = 1 << 25       # escalera de mano
+# Flags de comportamiento (bits 26-31)
+FLAG_ACTIVE = 1 << 26       # celda activa: tiene una entrada en la tabla de eventos
+FLAG_LADDER = 1 << 27       # escalera de mano
 
 # Diagonales
 SPLIT_SLASH = 0             # "/"  de la esquina SO a la NE
@@ -58,16 +58,22 @@ FILL_HALF = {"half_nw": (SPLIT_SLASH, 1), "half_se": (SPLIT_SLASH, 2),
              "half_ne": (SPLIT_BACKSLASH, 1), "half_sw": (SPLIT_BACKSLASH, 2)}
 FILL_THIN_SPLIT = {"thin_slash": SPLIT_SLASH, "thin_backslash": SPLIT_BACKSLASH}
 
-# --- Suelos: 29 piezas, cada una un plano  h = a + b·u + c·v ---------------
+# --- Suelos: 45 piezas, cada una un plano  h = a + b·u + c·v ---------------
 #
-# Rampas rectas: suben ½ planta a lo ancho de la celda, base 0 o ½.
+# Rampas rectas: suben ½ planta a lo ancho de la celda, base 0 o ½ (escaleras, 37°).
 # Rampas diagonales: suben ½ planta de esquina a esquina, base 0, ¼, ½ o ¾
 # (con base ¾ la esquina alta llega a 1¼: sobresale de la celda, y se permite).
+# Pendientes suaves ("slope"): suben ¼ de planta a lo ancho de la celda (21°), base 0, ¼, ½
+# o ¾. Con ellas y las diagonales, cualquier casilla de un terreno de alturas en las esquinas
+# (tipo Populous: vecinas a un cuarto de planta como mucho) se representa exactamente.
+# Los códigos 0-28 no cambian; las pendientes suaves son los 29-44.
 
 _AXIS_DIRS = {"N": (0.5, 0.0, -0.5), "S": (0.0, 0.0, 0.5),
               "E": (0.0, 0.5, 0.0), "W": (0.5, -0.5, 0.0)}
 _DIAG_DIRS = {"NE": (0.25, 0.25, -0.25), "SE": (0.0, 0.25, 0.25),
               "SW": (0.25, -0.25, 0.25), "NW": (0.5, -0.25, -0.25)}
+_SLOPE_DIRS = {"N": (0.25, 0.0, -0.25), "S": (0.0, 0.0, 0.25),
+               "E": (0.0, 0.25, 0.0), "W": (0.25, -0.25, 0.0)}
 
 
 def _build_floor_table():
@@ -84,6 +90,10 @@ def _build_floor_table():
         for base in (0.0, 0.25, 0.5, 0.75):
             names.append(f"ramp {d} {base:g}")
             coefs.append((a + base, b, c))
+    for d, (a, b, c) in _SLOPE_DIRS.items():
+        for base in (0.0, 0.25, 0.5, 0.75):
+            names.append(f"slope {d} {base:g}")
+            coefs.append((a + base, b, c))
     return names, np.array(coefs, dtype=np.float64)
 
 
@@ -93,7 +103,7 @@ FLOOR_MAX = np.array([np.nan] + [max(a + b * u + c * v for u in (0, 1) for v in 
                                   for a, b, c in FLOOR_COEFS[1:]])
 FLOOR = {name: i for i, name in enumerate(FLOOR_NAMES)}
 FLOOR_NONE = FLOOR["none"]
-assert len(FLOOR_NAMES) == 29 and FLOOR_NONE == 0
+assert len(FLOOR_NAMES) == 45 and FLOOR_NONE == 0 and len(FLOOR_NAMES) <= FLOOR_MASK + 1
 
 # --- Techos bajos ---------------------------------------------------------
 

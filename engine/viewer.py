@@ -27,7 +27,6 @@ from engine.render.sprites import (
     ROWS_4, WALK_FPS, SpriteRenderer, SpriteSheet, delete_sheet, facing_index, facing_indices,
 )
 from engine.render.world_renderer import Camera, Lighting, WorldRenderer
-from engine.world import cell as C
 from engine.world.store import SQLiteWorldStore
 from engine.world.view import WorldView
 
@@ -39,6 +38,7 @@ CUT_MODES = ("círculo", "planta", "no")         # cómo se oculta lo que hay en
 CUT_RADIUS_CELLS = 2.5
 LANTERN = {"color": (1.0, 0.62, 0.30), "radius": 5.0, "intensity": 1.3, "height": 1.5}
 NPC_MIX = {"persona": 0.55, "niño": 0.15, "perro": 0.2, "guardia": 0.1}
+EVICT_EVERY = 2.0            # segundos entre descargas de chunks lejanos
 
 
 class Viewer:
@@ -84,6 +84,7 @@ class Viewer:
         self.night = False
         self.lantern = True
         self.sim_ms = 0.0
+        self._evict_timer = 0.0
         if self.player is not None:
             self._center_on_player(1.0)
 
@@ -217,8 +218,13 @@ class Viewer:
         else:
             player.wish = wish if wish is not None else self._direction()    # X este, Z sur
         t0 = time.perf_counter()
-        self.sim.step(dt)
+        focus = self.focus()
+        self.sim.step(dt, focus)
         self.sim_ms = 0.9 * self.sim_ms + 0.1 * (time.perf_counter() - t0) * 1000
+        self._evict_timer += dt
+        if self._evict_timer > EVICT_EVERY:
+            self._evict_timer = 0.0
+            self.evict_far_chunks(focus)
 
         rows = t.rows()
         speed = np.hypot(t.vel[rows, 0], t.vel[rows, 2])
@@ -233,23 +239,45 @@ class Viewer:
             if self.follow:
                 self._center_on_player(1 - np.exp(-FOLLOW_RATE * dt))
 
+    def focus(self):
+        """Punto de interés de la simulación (X, Z en metros): el jugador, o el centro de la vista."""
+        if self.player is not None:
+            return float(self.player.pos[0]), float(self.player.pos[2])
+        g = self.renderer.geo
+        l, t, r, b = self.camera.bounds()
+        return (l + r) / 2 * g.cell_w / g.tile_w, (t + b) / 2 / g.sz
+
+    def evict_far_chunks(self, focus):
+        """Descarga los chunks lejos del punto de interés y de la vista (memoria acotada)."""
+        v, g = self.view, self.renderer.geo
+        span = v.chunk_size * g.cell_w
+        radius = self.sim.far + 2 * span
+        keep = {k for k in v.loaded if np.hypot((k[0] + 0.5) * span - focus[0], (k[1] + 0.5) * span - focus[1]) < radius}
+        keep |= set(self.renderer.visible_chunks(self.camera))
+        if len(keep) < len(v.loaded):
+            v.evict(keep)
+
     # --- Ocultar lo de encima y luces ---
 
     def covered(self) -> bool:
-        """¿Tiene el personaje algo por encima de su planta? Cuenta su celda, o al menos dos de las
-        cuatro vecinas en cruz: bajo un agujero del forjado sigue cubierto, y pegado a un edificio
-        desde fuera, no."""
-        g = self.renderer.geo
+        """¿Tiene el personaje un techo encima (un forjado, un puente, un balcón)?
+
+        Un techo tiene aire debajo: en el punto se busca el suelo transitable cerca de la altura
+        del personaje (que no esté enterrado bajo la columna) y, encima, algo a menos de dos
+        plantas con al menos 1 m de hueco. El terreno que sube a la planta siguiente es macizo
+        hasta su superficie, así que no cuenta. Se mira en su posición y a una celda en cruz:
+        cubierto si lo está su punto o al menos dos de los cuatro vecinos."""
+        g, v, phys = self.renderer.geo, self.view, self.sim.physics
         X, Y, Z = self.player.pos
-        level = int(np.floor((Y + 0.05) / g.cell_h))
-        cx, cy = int(np.floor(X / g.cell_w)), int(np.floor(Z / g.cell_w))
-        xs = np.array([cx, cx - 1, cx + 1, cx, cx])
-        ys = np.array([cy, cy, cy, cy - 1, cy + 1])
-        above = np.zeros(5, bool)
-        for lv in (level + 1, level + 2):
-            if lv <= self.view.level_max:
-                above |= (self.view.cells(xs, ys, lv) & C.GEOMETRY_MASK) != 0
-        return bool(above[0] or above[1:].sum() >= 2)
+        d = g.cell_w
+        xs = np.array([X, X - d, X + d, X, X])
+        zs = np.array([Z, Z, Z, Z - d, Z + d])
+        floor = phys.support(xs, zs, np.full(5, Y + 0.5))
+        level = np.floor((floor + 0.05) / g.cell_h).astype(int)
+        starts = np.array([v.column(int(np.floor(x / d)), int(np.floor(z / d)))[0] for x, z in zip(xs, zs)])
+        ceiling = phys.ceiling(xs, zs, floor)
+        roof = (starts <= level) & (floor > Y - 1.0) & (ceiling - floor >= 1.0) & (ceiling <= floor + 2 * g.cell_h)
+        return bool(roof[0] or roof[1:].sum() >= 2)
 
     def update_cut(self):
         """Ocultar lo que hay encima del personaje según el modo (tecla C)."""
@@ -327,7 +355,8 @@ class Viewer:
                     extra = f" · pies ({X:.1f}, {Y:.2f}, {Z:.1f}) m{'' if self.player.grounded else ' en el aire'}"
                 glfw.set_window_title(self.window,
                     f"{self.world_path.name} · {frames / max(now - title_at, 1e-6):.0f} fps · "
-                    f"{len(self.table)} personajes, simulación {self.sim_ms:.1f} ms · zoom {self.camera.zoom:.2f} · "
+                    f"{len(self.table)} personajes ({'/'.join(map(str, self.sim.tier_counts))} cerca/medio/lejos), "
+                    f"simulación {self.sim_ms:.1f} ms · chunks {len(self.view.loaded)} · zoom {self.camera.zoom:.2f} · "
                     f"planta máx {r.max_level}{extra} · ocultar encima: {CUT_MODES[self.cut_mode]}"
                     f"{' (activo)' if r.cut_level is not None else ''}"
                     f" · luz {'de noche' if self.night else 'de día'}{'' if r.lighting.enabled else ' (apagada)'}"

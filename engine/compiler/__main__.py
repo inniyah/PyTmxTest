@@ -19,9 +19,12 @@ def main(argv=None) -> int:
     out = args.out or args.map.with_suffix(".cworld")
     report = compile_tmx(args.map, out, args.chunk_size,
                          compression="none" if args.no_compression else "zlib", force=args.force)
-    print(report.summary())
-    if report.ok or args.force:
-        print(f"-> {out}")
+    try:
+        print(report.summary())
+        if report.ok or args.force:
+            print(f"-> {out}")
+    except BrokenPipeError:                    # salida cortada (por ejemplo, con | head)
+        sys.stdout = None
     return 0 if report.ok else 1
 
 

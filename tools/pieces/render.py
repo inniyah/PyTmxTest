@@ -73,7 +73,7 @@ DEFAULT_PROJECTION = Projection()
 
 
 def render(faces: List[Tuple[np.ndarray, Tuple[float, float, float]]], proj: Projection = DEFAULT_PROJECTION,
-           with_albedo: bool = False):
+           with_albedo: bool = False, outline: bool = True):
     """Devuelve (color uint8 (h, w, 4), normal uint8 (h, w, 4), posición uint16 (h, w, 4)) y,
     con ``with_albedo``, además el albedo uint8 (h, w, 4)."""
     w, h = proj.image_size
@@ -130,8 +130,9 @@ def render(faces: List[Tuple[np.ndarray, Tuple[float, float, float]]], proj: Pro
     centre = padded[1:-1, 1:-1]
     edge = covered & ((centre != padded[1:-1, 2:]) | (centre != padded[1:-1, :-2])
                       | (centre != padded[2:, 1:-1]) | (centre != padded[:-2, 1:-1]))
-    color[edge] *= EDGE_DARKEN
-    albedo[edge] *= EDGE_DARKEN
+    if outline:                                  # sin contorno en el suelo: el terreno queda continuo
+        color[edge] *= EDGE_DARKEN
+        albedo[edge] *= EDGE_DARKEN
 
     rgba = np.zeros((h, w, 4), np.uint8)
     rgba[..., :3] = np.clip(color * 255 + 0.5, 0, 255)

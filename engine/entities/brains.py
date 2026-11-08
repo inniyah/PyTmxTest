@@ -16,7 +16,8 @@ IDLE, WALKING = 0, 1
 WALK_SECONDS = (2.0, 6.0)
 IDLE_SECONDS = (0.5, 2.5)
 IDLE_CHANCE = 0.35
-LOOK_AHEAD = 0.7          # metros por delante del borde del cilindro
+LOOK_AHEAD = 0.7          # metros por delante del borde del cilindro (caídas)
+LOOK_AHEAD_HIGH = 0.3     # más cerca para lo que sube: así una ladera de 21° no parece un muro
 DROP_LIMIT = 0.5          # una caída mayor que esto, delante: no seguir
 STUCK_FRACTION = 0.3      # avanzar menos de esta fracción de lo deseado: atascado
 
@@ -26,8 +27,8 @@ class WanderBrains:
         self.physics = physics
         self.rng = rng or np.random.default_rng()
 
-    def update(self, table: ActorTable, dt: float):
-        rows = table.rows()
+    def update(self, table: ActorTable, dt: float, rows=None):
+        rows = table.rows() if rows is None else rows
         rows = rows[table.brain[rows] == BRAIN_WANDER]
         if rows.size == 0:
             return
@@ -55,7 +56,8 @@ class WanderBrains:
             reach = table.radius[r] + LOOK_AHEAD
             x, y, z = table.pos[r, 0], table.pos[r, 1], table.pos[r, 2]
             ahead = self.physics.support(x + dx * reach, z + dz * reach, y + table.step[r] + 0.01)
-            blocked_high = self.physics.support(x + dx * reach, z + dz * reach, y + table.height[r]) \
+            near = table.radius[r] + LOOK_AHEAD_HIGH
+            blocked_high = self.physics.support(x + dx * near, z + dz * near, y + table.height[r]) \
                 > y + table.step[r] + 1e-3
             drop = ahead < y - DROP_LIMIT
             speed = np.hypot(table.vel[r, 0], table.vel[r, 2])

@@ -6,16 +6,15 @@ from engine.compiler import compile_tmx
 from engine.physics import WalkerPhysics, Walkers
 from engine.world.store import SQLiteWorldStore
 from engine.world.view import WorldView
-from tools.pieces.build import build_tileset
 from tools.pieces.course import build_course
 
 CW, DT = 2.0, 1 / 120
 
 
 @pytest.fixture(scope="module")
-def phys(tmp_path_factory):
+def phys(tmp_path_factory, shared_tileset):
     out = tmp_path_factory.mktemp("phys")
-    tsx = build_tileset(out / "assets")
+    tsx = shared_tileset
     build_course(out / "course.tmx", tsx)
     assert compile_tmx(out / "course.tmx", out / "course.cworld").ok
     return WalkerPhysics(WorldView(SQLiteWorldStore(out / "course.cworld")))
@@ -102,12 +101,12 @@ def test_wide_ramp_can_be_entered_anywhere_along_its_low_edge(phys, x):
 
 
 @pytest.fixture(scope="module")
-def slope(tmp_path_factory):
+def slope(tmp_path_factory, shared_tileset):
     """Un campo de 3 × 3 rampas diagonales hacia el NE sobre suelo plano (bloques debajo)."""
     from tools.pieces.catalog import build_catalog
     from tools.pieces.course import CourseBuilder
     out = tmp_path_factory.mktemp("slope")
-    tsx = build_tileset(out / "assets")
+    tsx = shared_tileset
     b = CourseBuilder(10, 10, build_catalog())
     field = {(3 + i, 6 - j): 0.25 * (i + j) for i in range(3) for j in range(3)}
     for y in range(10):

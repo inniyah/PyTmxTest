@@ -7,14 +7,14 @@ from engine.render.geometry import FLOATS_PER_VERTEX, AtlasLayout, WorldGeometry
 from engine.world import visual as V
 from engine.world.store import SQLiteWorldStore
 from engine.world.view import WorldView
-from tools.pieces.build import build_gallery, build_tileset
+from tools.pieces.build import build_gallery
 from tools.pieces.course import build_course
 
 
 @pytest.fixture(scope="module")
-def worlds(tmp_path_factory):
+def worlds(tmp_path_factory, shared_tileset):
     out = tmp_path_factory.mktemp("render")
-    tsx = build_tileset(out / "assets")
+    tsx = shared_tileset
     build_gallery(out / "maps" / "gallery.tmx", tsx)
     build_course(out / "maps" / "course.tmx", tsx)
     for name in ("gallery", "course"):
@@ -183,7 +183,7 @@ def test_light_defaults_and_colors():
     assert r > g > b > 0                                                      # cálida, en lineal
 
 
-def test_flipped_tiles_flip_their_normals(gl_viewer_factory, tmp_path):
+def test_flipped_tiles_flip_their_normals(gl_viewer_factory, tmp_path, shared_tileset):
     """Una luz al este: la cara de una rampa volteada (mira al este) brilla más que la normal."""
     from pathlib import Path
 
@@ -192,7 +192,7 @@ def test_flipped_tiles_flip_their_normals(gl_viewer_factory, tmp_path):
     from tools.pieces.catalog import build_catalog
     from tools.pieces.course import CourseBuilder
     from tools.pieces.render import DEFAULT_PROJECTION
-    tsx = build_tileset(tmp_path / "assets")
+    tsx = shared_tileset
     b = CourseBuilder(8, 5, build_catalog())
     for y in range(5):
         for x in range(8):

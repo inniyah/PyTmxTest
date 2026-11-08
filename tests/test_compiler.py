@@ -13,7 +13,7 @@ from engine.world import visual as V
 from engine.world.chunk import ChunkData
 from engine.world.store import SQLiteWorldStore
 from engine.world.view import WorldView
-from tools.pieces.build import build_gallery, build_tileset
+from tools.pieces.build import build_gallery
 
 FLIP_H = 0x80000000
 
@@ -21,9 +21,9 @@ FLIP_H = 0x80000000
 # --- La galería, comprobada celda a celda de forma independiente ---------------------
 
 @pytest.fixture(scope="module")
-def gallery(tmp_path_factory):
+def gallery(tmp_path_factory, shared_tileset):
     out = tmp_path_factory.mktemp("gal")
-    tsx = build_tileset(out / "assets")
+    tsx = shared_tileset
     tmx = out / "maps" / "gallery.tmx"
     build_gallery(tmx, tsx)
     report = compile_tmx(tmx, out / "gallery.cworld", chunk_size=16)
@@ -63,7 +63,9 @@ def expected_values(tmx_path):
 def test_gallery_compiles_cleanly(gallery):
     _, _, report = gallery
     assert report.ok and not report.warnings, report.summary()
-    assert report.stats["chunks"] == 6                    # 31 × 37 celdas en chunks de 16
+    m = tm.TiledMap.load(gallery[0])
+    expected = -(-m.width // 16) * -(-m.height // 16)        # chunks de 16 que cubren el mapa
+    assert report.stats["chunks"] == expected
 
 
 def test_every_cell_matches_an_independent_computation(gallery):

@@ -20,7 +20,7 @@ from typing import Dict, Iterable, Iterator, Optional, Sequence, Tuple
 
 from .chunk import PARTS, ChunkData
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2          # 2: suelos de 6 bits por mitad (pendientes suaves)
 
 _SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);

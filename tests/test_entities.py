@@ -10,15 +10,14 @@ from engine.entities.world_sim import ActorSim
 from engine.physics import WalkerPhysics, Walkers
 from engine.world.store import SQLiteWorldStore
 from engine.world.view import WorldView
-from tools.pieces.build import build_tileset
 from tools.pieces.course import build_course
 from tools.pieces.levels import build_levels
 
 
 @pytest.fixture(scope="module")
-def worlds(tmp_path_factory):
+def worlds(tmp_path_factory, shared_tileset):
     out = tmp_path_factory.mktemp("crowd")
-    tsx = build_tileset(out / "assets")
+    tsx = shared_tileset
     build_course(out / "course.tmx", tsx)
     build_levels(out / "levels.tmx", tsx)
     for name in ("course", "levels"):

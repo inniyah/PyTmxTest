@@ -53,10 +53,10 @@ LIGHT_UNIFORMS = ("u_lighting", "u_sky", "u_ground", "u_sun_dir", "u_sun_color",
 class Lighting:
     """Ambiente de cielo y suelo, sol y si la iluminación está activa. Colores lineales."""
     enabled: bool = True
-    sky: tuple = (0.42, 0.46, 0.55)
-    ground: tuple = (0.20, 0.18, 0.16)
-    sun_dir: tuple = (-0.45, 0.80, 0.55)       # hacia el sol: alto, al suroeste (de cara a la cámara)
-    sun_color: tuple = (0.85, 0.80, 0.70)
+    sky: tuple = (0.34, 0.38, 0.47)
+    ground: tuple = (0.17, 0.15, 0.13)
+    sun_dir: tuple = (-0.62, 0.60, 0.50)       # hacia el sol: al suroeste y no muy alto, para que
+    sun_color: tuple = (1.00, 0.93, 0.80)      # el relieve se lea (las laderas al sol se aclaran)
     lamps: float = 0.25                        # factor de las luces puntuales (de día, poco)
 
     @classmethod
