@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS chunks (cx INTEGER, cy INTEGER,
 CREATE TABLE IF NOT EXISTS atlas_regions (id INTEGER PRIMARY KEY, page INTEGER,
     x INTEGER, y INTEGER, w INTEGER, h INTEGER, border INTEGER);
 CREATE TABLE IF NOT EXISTS atlas_pages (page INTEGER, kind TEXT, png BLOB, PRIMARY KEY (page, kind));
+CREATE TABLE IF NOT EXISTS nav (cx INTEGER, cy INTEGER, data BLOB, PRIMARY KEY (cx, cy));
+CREATE TABLE IF NOT EXISTS places (id INTEGER PRIMARY KEY, name TEXT, kind TEXT, level INTEGER,
+                                   x0 INTEGER, y0 INTEGER, x1 INTEGER, y1 INTEGER);
 CREATE TABLE IF NOT EXISTS lights (id INTEGER PRIMARY KEY, x REAL, y REAL, z REAL,
     r REAL, g REAL, b REAL, radius REAL, intensity REAL);
 """
@@ -45,7 +48,8 @@ class WorldStore:
 
 class SQLiteWorldStore(WorldStore):
     def __init__(self, path, mode: str = "r"):
-        """``mode``: "r" solo lectura (el juego), "w" crea o reescribe (el compilador)."""
+        """``mode``: "r" solo lectura (el juego), "w" crea o reescribe (el compilador), "a" abre uno
+        existente para añadirle datos (por ejemplo, el grafo de navegación)."""
         self.path = Path(path)
         if mode == "w":
             if self.path.exists():
@@ -56,6 +60,11 @@ class SQLiteWorldStore(WorldStore):
             if not self.path.exists():
                 raise FileNotFoundError(self.path)
             self.db = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True)
+        elif mode == "a":
+            if not self.path.exists():
+                raise FileNotFoundError(self.path)
+            self.db = sqlite3.connect(self.path)
+            self.db.executescript(_SCHEMA)
         else:
             raise ValueError(mode)
         self._meta: Optional[dict] = None
@@ -130,6 +139,36 @@ class SQLiteWorldStore(WorldStore):
         return [k for (k,) in self.db.execute("SELECT DISTINCT kind FROM atlas_pages ORDER BY kind")]
 
     # --- Ciclo de vida ---
+
+    # --- Lugares (rectángulos de celdas [x0, x1) × [y0, y1) en una planta) ---
+
+    def write_places(self, rows):
+        self.db.execute("DELETE FROM places")
+        self.db.executemany("INSERT INTO places VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+
+    def places(self):
+        try:
+            return self.db.execute("SELECT id, name, kind, level, x0, y0, x1, y1 FROM places ORDER BY id").fetchall()
+        except sqlite3.OperationalError:            # mundo compilado antes de los lugares
+            return []
+
+    # --- Navegación (opcional: mundos sin ella siguen funcionando) ---
+
+    def write_nav(self, cx: int, cy: int, data: bytes):
+        self.db.execute("INSERT OR REPLACE INTO nav VALUES (?, ?, ?)", (cx, cy, data))
+
+    def read_nav(self, cx: int, cy: int) -> Optional[bytes]:
+        try:
+            row = self.db.execute("SELECT data FROM nav WHERE cx = ? AND cy = ?", (cx, cy)).fetchone()
+        except sqlite3.OperationalError:            # mundo compilado antes de la navegación
+            return None
+        return row[0] if row else None
+
+    def has_nav(self) -> bool:
+        try:
+            return self.db.execute("SELECT 1 FROM nav LIMIT 1").fetchone() is not None
+        except sqlite3.OperationalError:
+            return False
 
     def commit(self):
         self.db.commit()

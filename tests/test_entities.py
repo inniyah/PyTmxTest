@@ -21,7 +21,7 @@ def worlds(tmp_path_factory, shared_tileset):
     build_course(out / "course.tmx", tsx)
     build_levels(out / "levels.tmx", tsx)
     for name in ("course", "levels"):
-        assert compile_tmx(out / f"{name}.tmx", out / f"{name}.cworld").ok
+        assert compile_tmx(out / f"{name}.tmx", out / f"{name}.cworld", nav=False).ok
     return {name: WorldView(SQLiteWorldStore(out / f"{name}.cworld")) for name in ("course", "levels")}
 
 

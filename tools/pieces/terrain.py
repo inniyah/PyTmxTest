@@ -181,6 +181,7 @@ class GridBuilder:
         self.gid = {name: i + 1 for i, name in enumerate(self.pieces)}
         self.layers: Dict[Tuple[int, str], List[np.ndarray]] = {}
         self.lights: Dict[int, list] = {}
+        self.places: Dict[int, list] = {}
 
     def put(self, level: int, x: int, y: int, name: str):
         if name.startswith("material_"):
@@ -197,6 +198,10 @@ class GridBuilder:
         arr[y, x] = self.gid[name]
         stack.append(arr)
 
+    def place(self, level, x0, y0, x1, y1, name, kind):
+        """Lugar: rectángulo de celdas [x0, x1) × [y0, y1) en una planta."""
+        self.places.setdefault(level, []).append((x0, y0, x1, y1, name, kind))
+
     def light(self, level, x, y, color="#ffd9a0", radius=6.0, intensity=1.5, height=2.2):
         self.lights.setdefault(level, []).append((x, y, color, radius, intensity, height))
 
@@ -208,7 +213,7 @@ class GridBuilder:
                                      tileheight=proj.image_size[1],
                                      source=os.path.relpath(tsx_path, tmx_path.parent)))
         next_id, next_obj = 1, 1
-        for level in sorted({lv for lv, _ in self.layers} | set(self.lights)):
+        for level in sorted({lv for lv, _ in self.layers} | set(self.lights) | set(self.places)):
             group = tm.LayerGroup(name=f"Planta {level}", id=next_id,
                                   properties={"Z": tm.Property("Z", "int", level)},
                                   offsety=-level * proj.level_h)
@@ -232,6 +237,16 @@ class GridBuilder:
                                            "height": tm.Property("height", "float", height)})
                     obj.extra_children.append(ET.Element("point"))
                     og.objects.append(obj)
+                    next_obj += 1
+                group.layers.append(og)
+            if level in self.places:
+                og = tm.ObjectGroup(name="lugares", id=next_id)
+                next_id += 1
+                for x0, y0, x1, y1, name, kind in self.places[level]:
+                    og.objects.append(tm.MapObject(
+                        id=next_obj, name=name, type="place", x=x0 * proj.tile_w, y=y0 * proj.row_h,
+                        width=(x1 - x0) * proj.tile_w, height=(y1 - y0) * proj.row_h,
+                        properties={"kind": tm.Property("kind", "string", kind)}))
                     next_obj += 1
                 group.layers.append(og)
             m.layers.append(group)
@@ -274,11 +289,83 @@ def place_house(b: GridBuilder, x0: int, y0: int, w: int, d: int, level: int, rn
     return stairs, (door, y1 + 1)
 
 
-def road_cells(doors, width: int, depth: int, road_width: int = 2) -> set:
-    """Caminos entre las puertas: árbol de distancia mínima (Prim) y, para cada par, una línea
-    de ``road_width`` celdas de ancho."""
+ROAD_SLOPE = 2.0      # coste extra por cuarto de planta de desnivel entre celdas
+ROAD_REUSE = 0.3      # lo que cuesta pasar por una celda que ya es camino (los caminos se unen)
+GRID_DIRS = [(1, 0), (0, 1), (-1, 0), (0, -1), (1, 1), (-1, 1), (-1, -1), (1, -1)]
+
+
+def road_cells(doors, width: int, depth: int, road_width: int = 2, heights=None, inside=frozenset()) -> set:
+    """Red de caminos entre las puertas, siguiendo el terreno.
+
+    Sobre la rejilla de celdas (8 vecinos), el coste de un paso es distancia × (1 + ROAD_SLOPE ×
+    desnivel en cuartos): una celda en pendiente cuesta el triple que una llana, así que los
+    caminos siguen las curvas de nivel. Las casas no se cruzan (ni sus esquinas en diagonal). Se
+    empieza por la puerta más céntrica, y cada puerta se une a la red ya hecha (la más cercana
+    primero) por su camino más barato; las celdas que ya son camino cuestan poco, así que los
+    caminos nuevos se juntan con los existentes y salen ramales. Sin alturas, líneas rectas."""
     if len(doors) < 2:
         return set()
+    if heights is None:
+        return _straight_roads(doors, width, depth, road_width)
+    from engine.nav.shortest import ReverseGraph, ShortestPaths
+
+    H = np.asarray(heights, float)
+    level = (H[:-1, :-1] + H[1:, :-1] + H[:-1, 1:] + H[1:, 1:]) / 4.0       # altura media de cada celda
+    n = width * depth
+    ys, xs = np.divmod(np.arange(n), width)
+    blocked = np.zeros((depth, width), bool)
+    for cx, cy in inside:
+        blocked[cy, cx] = True
+    target = np.full((n, 8), -1, np.int64)
+    base = np.full((n, 8), np.inf)
+    for k, (dx, dy) in enumerate(GRID_DIRS):
+        tx, ty = xs + dx, ys + dy
+        ok = (tx >= 0) & (tx < width) & (ty >= 0) & (ty < depth)
+        ok &= ~blocked[ys, xs]
+        ok[ok] &= ~blocked[ty[ok], tx[ok]]
+        if dx and dy:                                              # sin cortar esquinas de casa
+            ok[ok] &= ~blocked[ys[ok], tx[ok]] & ~blocked[ty[ok], xs[ok]]
+        idx = np.nonzero(ok)[0]
+        target[idx, k] = ty[idx] * width + tx[idx]
+        rise = np.abs(level[ty[idx], tx[idx]] - level[ys[idx], xs[idx]])
+        base[idx, k] = np.hypot(dx, dy) * (1.0 + ROAD_SLOPE * rise)
+
+    centre = np.mean(np.array(doors, float), axis=0)
+    order = sorted(range(len(doors)), key=lambda i: (doors[i][0] - centre[0]) ** 2 + (doors[i][1] - centre[1]) ** 2)
+    door_ids = [min(max(doors[i][1], 0), depth - 1) * width + min(max(doors[i][0], 0), width - 1) for i in order]
+    network = np.zeros(n, bool)
+    network[door_ids[0]] = True
+    remaining = door_ids[1:]
+    while remaining:
+        # Coste de cada paso: más barato si la celda de llegada ya es camino
+        costs = np.where(np.isfinite(base) & network[np.maximum(target, 0)], base * ROAD_REUSE, base)
+        sp = ShortestPaths(ReverseGraph.from_targets(target, costs), np.nonzero(network)[0])
+        sp.run()
+        # La puerta más cercana (en coste) a la red, y su camino
+        best = min(remaining, key=lambda d: sp.dist[d])
+        remaining.remove(best)
+        node = best
+        for _ in range(n):
+            network[node] = True
+            if sp.dist[node] == 0:
+                break
+            total = costs[node] + np.where(target[node] >= 0, sp.dist[np.maximum(target[node], 0)], np.inf)
+            k = int(np.argmin(total))
+            if not np.isfinite(total[k]):
+                break
+            node = int(target[node, k])
+    cells = set()
+    for node in np.nonzero(network)[0]:
+        y, x = divmod(int(node), width)
+        for dx in range(road_width):
+            for dy in range(road_width):
+                if 0 <= x + dx < width and 0 <= y + dy < depth and (x + dx, y + dy) not in inside:
+                    cells.add((x + dx, y + dy))
+    return cells
+
+
+def _straight_roads(doors, width: int, depth: int, road_width: int = 2) -> set:
+    """Líneas rectas entre las puertas (árbol de distancia mínima)."""
     pts = np.array(doors, float)
     linked = {0}
     edges = []
@@ -305,12 +392,24 @@ def road_cells(doors, width: int, depth: int, road_width: int = 2) -> set:
     return cells
 
 
+def plaza_cells(road: set, doors, inside: set, width: int, depth: int, size: int = 6) -> set:
+    """Plaza de ``size`` × ``size`` celdas en la celda de camino más cercana al centro de las casas."""
+    if not road or not doors:
+        return set()
+    centre = np.mean(np.array(doors, float), axis=0)
+    rx, ry = min(road, key=lambda c: (c[0] - centre[0]) ** 2 + (c[1] - centre[1]) ** 2)
+    x0 = int(np.clip(rx - size // 2, 1, width - size - 1))
+    y0 = int(np.clip(ry - size // 2, 1, depth - size - 1))
+    return {(x, y) for x in range(x0, x0 + size) for y in range(y0, y0 + size)} - inside
+
+
 @dataclass
 class TerrainInfo:
     heights: np.ndarray
     plots: list
     road: set = None
     doors: list = None
+    plaza: set = None
 
 
 def build_terrain(tmx_path: Path, tsx_path: Path, width: int = 256, depth: int = 256,
@@ -326,11 +425,17 @@ def build_terrain(tmx_path: Path, tsx_path: Path, width: int = 256, depth: int =
     for x, y, w, d in plots:
         level = int(H[y, x]) // QUARTERS_PER_LEVEL
         stairs, door = place_house(b, x + 1, y + 1, w - 2, d - 2, level, rng)
+        b.place(level, x + 1, y + 1, x + w - 1, y + d - 1, f"casa {len(doors) + 1}", "casa")
         for cell in stairs:
             stairs_cells[cell] = level
         doors.append(door)
         inside |= {(cx, cy) for cx in range(x + 1, x + w - 1) for cy in range(y + 1, y + d - 1)}
-    road = road_cells(doors, width, depth) - inside
+    road = road_cells(doors, width, depth, heights=H, inside=inside) - inside
+    plaza = plaza_cells(road, doors, inside, width, depth)
+    if plaza:
+        xs, ys = [c[0] for c in plaza], [c[1] for c in plaza]
+        cx, cy = (min(xs) + max(xs)) // 2, (min(ys) + max(ys)) // 2
+        b.place(int(H[cy, cx]) // QUARTERS_PER_LEVEL, min(xs), min(ys), max(xs) + 1, max(ys) + 1, "plaza", "plaza")
 
     # Terreno: cada casilla, sus piezas (las de la escalera de las casas la sustituyen)
     for y in range(depth):
@@ -341,7 +446,8 @@ def build_terrain(tmx_path: Path, tsx_path: Path, width: int = 256, depth: int =
             for level, name in pieces:
                 b.put(level, x, y, name)
             if (x, y) not in inside:
-                material = "material_camino" if (x, y) in road else "material_hierba"
+                material = ("material_adoquin" if (x, y) in plaza else
+                            "material_camino" if (x, y) in road else "material_hierba")
                 for level in sorted({lv for lv, name in pieces if name.startswith("floor")}):
                     b.put(level, x, y, material)
     for (x, y), lv in stairs_cells.items():
@@ -357,4 +463,4 @@ def build_terrain(tmx_path: Path, tsx_path: Path, width: int = 256, depth: int =
     m = b.to_map(tsx_path, tmx_path, proj)
     tmx_path.parent.mkdir(parents=True, exist_ok=True)
     m.save(tmx_path, encoding="base64", compression="zlib")
-    return TerrainInfo(H, plots, road, doors)
+    return TerrainInfo(H, plots, road, doors, plaza)

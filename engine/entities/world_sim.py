@@ -3,7 +3,8 @@
 Niveles de detalle alrededor de un punto de interés (el jugador o la cámara):
     cercana     (< near)        física y comportamiento completos, cada paso (60 Hz)
     intermedia  (near … far)    física cada dos pasos, con paso doble (30 Hz); comportamiento
-    lejana      (> far)         congelados: no cuestan nada
+    lejana      (> far)         sin física; los que siguen una rutina avanzan por su camino
+                                según el tiempo (dos veces por segundo), y los demás, quietos
 Sin punto de interés, todos en la cercana.
 """
 
@@ -20,13 +21,18 @@ BRAIN_EVERY = 6                 # el comportamiento decide 10 veces por segundo
 
 
 NEAR, FAR = 60.0, 160.0       # metros
+FAR_EVERY = 30                # pasos entre avances de la zona lejana (dos veces por segundo)
 
 
 class ActorSim:
-    def __init__(self, world, table: ActorTable, rng=None, near: float = NEAR, far: float = FAR):
+    def __init__(self, world, table: ActorTable, rng=None, near: float = NEAR, far: float = FAR,
+                 routines=None):
         self.physics = WalkerPhysics(world)
         self.table = table
         self.brains = WanderBrains(self.physics, rng)
+        self.routines = routines              # RoutineBrains, si el mundo tiene navegación y lugares
+        if routines is not None:
+            routines.physics = self.physics
         self.accumulator = 0.0
         self.steps = 0
         self.near, self.far = near, far
@@ -86,10 +92,18 @@ class ActorSim:
             self.accumulator = max_steps * step
         done = 0
         while self.accumulator >= step:
-            near, mid = self.tiers(self.table.rows(), focus)
+            rows = self.table.rows()
+            near, mid = self.tiers(rows, focus)
             self.tier_counts = (near.size, mid.size, len(self.table) - near.size - mid.size)
+            if self.routines is not None and focus is not None and self.steps % FAR_EVERY == 0:
+                far = np.setdiff1d(rows, np.concatenate([near, mid]), assume_unique=True)
+                if far.size:
+                    self.routines.update_far(self.table, step * FAR_EVERY, far)
             if self.steps % BRAIN_EVERY == 0:
-                self.brains.update(self.table, step * BRAIN_EVERY, np.concatenate([near, mid]))
+                active = np.concatenate([near, mid])
+                self.brains.update(self.table, step * BRAIN_EVERY, active)
+                if self.routines is not None:
+                    self.routines.update(self.table, step * BRAIN_EVERY, active)
             self._physics(near, step)
             if self.steps % 2 == 0:
                 self._physics(mid, 2 * step)

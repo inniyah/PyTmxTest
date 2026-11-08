@@ -47,7 +47,7 @@ def test_the_worst_material_wins_and_markers_take_no_slots(tmp_path, shared_tile
         for wall in ("wall_N", "wall_W", "wall_S"):   # 4 tiles reales + 2 marcadores en (0, 0)
             b.put(0, 0, 0, wall)
     tmx = _small_map(tmp_path, shared_tileset, extra)
-    report = compile_tmx(tmx, tmp_path / "m.cworld")
+    report = compile_tmx(tmx, tmp_path / "m.cworld", nav=False)
     assert report.ok and not report.warnings, report.summary()
     store = SQLiteWorldStore(tmp_path / "m.cworld")
     mats = Materials.from_json(store.meta()["materials"])
@@ -73,7 +73,7 @@ def test_unknown_material_is_an_error(tmp_path, shared_tileset):
 
 def test_generated_terrain_has_roads_grass_and_house_floors(tmp_path, shared_tileset):
     info = build_terrain(tmp_path / "t.tmx", shared_tileset, 96, 96, houses=4, seed=3)
-    assert compile_tmx(tmp_path / "t.tmx", tmp_path / "t.cworld", chunk_size=16).ok
+    assert compile_tmx(tmp_path / "t.tmx", tmp_path / "t.cworld", chunk_size=16, nav=False).ok
     store = SQLiteWorldStore(tmp_path / "t.cworld")
     mats = Materials.from_json(store.meta()["materials"])
     view = WorldView(store)
@@ -85,14 +85,15 @@ def test_generated_terrain_has_roads_grass_and_house_floors(tmp_path, shared_til
             if code:
                 return mats.name(code)
         return None
-    road = sorted(info.road)[:: max(1, len(info.road) // 40)]
+    road = sorted(info.road - info.plaza)[:: max(1, len(info.road) // 40)]
     assert road and all(top_material(x, y) == "camino" for x, y in road)
+    assert info.plaza and all(top_material(x, y) == "adoquin" for x, y in info.plaza)
     X, Y, w, d = info.plots[0]
     assert top_material(X + 2, Y + 2) == "suelo"
     rng = np.random.default_rng(0)
     inside = {(cx, cy) for X, Y, w, d in info.plots for cx in range(X, X + w) for cy in range(Y, Y + d)}
     grass = [(int(x), int(y)) for x, y in rng.integers(0, 96, (60, 2))
-             if (int(x), int(y)) not in info.road and (int(x), int(y)) not in inside]
+             if (int(x), int(y)) not in info.road | info.plaza and (int(x), int(y)) not in inside]
     assert all(top_material(x, y) == "hierba" for x, y in grass)
 
 
@@ -110,7 +111,7 @@ def test_material_tint_only_when_enabled(tmp_path, shared_tileset):
 
     from engine.viewer import Viewer
     tmx = _small_map(tmp_path, shared_tileset, lambda b: b.put(0, 1, 1, "material_barro"))
-    assert compile_tmx(tmx, tmp_path / "m.cworld").ok
+    assert compile_tmx(tmx, tmp_path / "m.cworld", nav=False).ok
     v = Viewer(tmp_path / "m.cworld", 320, 240, visible=False, player=False)
     try:
         assert v.renderer.materials is not None

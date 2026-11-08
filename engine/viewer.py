@@ -23,7 +23,7 @@ import numpy as np
 from OpenGL.GL import GL_RGBA, GL_TRUE, GL_UNSIGNED_BYTE, glReadPixels
 from PIL import Image
 
-from engine.entities import BRAIN_NONE, BRAIN_WANDER, ActorTable, load_types
+from engine.entities import BRAIN_NONE, BRAIN_ROUTINE, BRAIN_WANDER, ActorTable, RoutineBrains, load_types
 from tmx_explorer import __version__
 from engine.entities.world_sim import PHYSICS_HZ, ActorSim
 from engine.render.gpu_timer import GpuTimer
@@ -75,7 +75,8 @@ class Viewer:
         self.rng = np.random.default_rng(seed)
         self.types = load_types()
         self.table = ActorTable(self.types)
-        self.sim = ActorSim(self.view, self.table, self.rng)
+        self.routines = self._load_routines()
+        self.sim = ActorSim(self.view, self.table, self.rng, routines=self.routines)
         self.sprites = SpriteRenderer(self.renderer.geo)
         self.gpu_timer = GpuTimer()                       # tiempo de GPU por tramo (barra de título)
         self.renderer.timer = self.sprites.timer = self.gpu_timer
@@ -122,13 +123,47 @@ class Viewer:
         y = float(self.sim.physics.support(x, z, top, search=v.level_max - v.level_min + 3)[0])
         return [x, max(y, v.level_min * g.cell_h), z]
 
+    def _load_routines(self):
+        """Rutinas (casa ↔ plaza) si el mundo tiene grafo de navegación y casas."""
+        store = self.view.store
+        if not store.has_nav():
+            return None
+        from engine.nav import NavGraph, load_places
+        from engine.world.materials import Materials
+        places = load_places(store)
+        materials = store.meta().get("materials")
+        if not materials or not any(p.kind == "casa" for p in places):
+            return None
+        graph = NavGraph(store, self.view.chunk_size, self.renderer.geo.cell_w)
+        return RoutineBrains(graph, places, self.types, Materials.from_json(materials), self.rng,
+                             self.renderer.geo.cell_h)
+
     def spawn_npcs(self, count: int):
+        if self.routines is not None:
+            return self.spawn_routine_npcs(count)
         v = self.view
         points = self.sim.spawn_points(count, self.rng, levels=list(range(v.level_min, v.level_max + 1)))
         names = list(NPC_MIX)
         kinds = self.rng.choice(names, len(points), p=list(NPC_MIX.values()))
         for p, kind in zip(points, kinds):
             self.table.spawn(kind, p, brain=BRAIN_WANDER)
+
+    def spawn_routine_npcs(self, count: int):
+        """Cada NPC en una casa (al azar), con la rutina casa ↔ plaza; empiezan esperando un poco."""
+        R, t = self.routines, self.table
+        houses = [p for p in R.places.values() if p.kind == "casa"]
+        names = list(NPC_MIX)
+        kinds = self.rng.choice(names, count, p=list(NPC_MIX.values()))
+        for kind in kinds:
+            home = houses[int(self.rng.integers(len(houses)))]
+            nodes = R.cache.goal_nodes(home)
+            if len(nodes) == 0:
+                continue
+            x, y, z = R.graph.position(int(self.rng.choice(nodes)))
+            row = t.row(t.spawn(kind, [x, y, z], brain=BRAIN_ROUTINE))
+            t.home[row] = t.target_place[row] = home.id
+            t.routine_state[row] = 1
+            t.routine_timer[row] = self.rng.uniform(0, 30)
 
     def sheet(self, path: str) -> SpriteSheet:
         if path not in self.sheets:
@@ -356,6 +391,14 @@ class Viewer:
         inside = (sx > left - margin) & (sx < right + margin) & (sy > top - margin) & (sy < bottom + margin)
         return rows[inside]
 
+    def routine_text(self) -> str:
+        if self.routines is None:
+            return ""
+        rows = self.table.rows()
+        mine = rows[self.table.brain[rows] == BRAIN_ROUTINE]
+        moving = int((self.table.routine_state[mine] == 0).sum())
+        return f" · rutinas: {moving} en camino, {len(mine) - moving} en un lugar, {self.routines.arrived} llegadas"
+
     def timing_text(self) -> str:
         """Tiempos del dibujo: GPU por tramo (mundo, sombras, personajes) y CPU de preparar el frame."""
         g = self.gpu_timer.ms
@@ -392,7 +435,8 @@ class Viewer:
                     extra = f" · pies ({X:.1f}, {Y:.2f}, {Z:.1f}) m{'' if self.player.grounded else ' en el aire'}"
                 glfw.set_window_title(self.window,
                     f"v{__version__} · {self.world_path.name} · {frames / max(now - title_at, 1e-6):.0f} fps · "
-                    f"{len(self.table)} personajes ({'/'.join(map(str, self.sim.tier_counts))} cerca/medio/lejos), "
+                    f"{len(self.table)} personajes ({'/'.join(map(str, self.sim.tier_counts))} cerca/medio/lejos)"
+                    f"{self.routine_text()}, "
                     f"simulación {self.sim_ms:.1f} ms · {self.timing_text()} · "
                     f"chunks {len(self.view.loaded)} · zoom {self.camera.zoom:.2f} · "
                     f"planta máx {r.max_level}{extra} · ocultar encima: {CUT_MODES[self.cut_mode]}"

@@ -57,6 +57,13 @@ class ActorTable:
         self.brain_state = grow(g("brain_state"), fill=0, dtype=np.int8)
         self.brain_timer = grow(g("brain_timer"))
         self.heading = grow(g("heading"))
+        # Rutina (brain = 2): casa, lugar de destino, estado (0 en camino, 1 esperando), espera
+        self.home = grow(g("home"), fill=-1, dtype=np.int32)
+        self.target_place = grow(g("target_place"), fill=-1, dtype=np.int32)
+        self.routine_state = grow(g("routine_state"), fill=0, dtype=np.int8)
+        self.routine_timer = grow(g("routine_timer"))
+        self.last_node = grow(g("last_node"), fill=-1, dtype=np.int64)
+        self.travel_progress = grow(g("travel_progress"))      # m recorridos del tramo actual (lejos)
         self.capacity = capacity
 
     # --- Altas y bajas ---
@@ -86,6 +93,11 @@ class ActorTable:
         self.brain_state[row] = 0
         self.brain_timer[row] = 0
         self.heading[row] = 0
+        self.home[row] = self.target_place[row] = -1
+        self.routine_state[row] = 0
+        self.routine_timer[row] = 0
+        self.last_node[row] = -1
+        self.travel_progress[row] = 0.0
         return self.handle(row)
 
     def despawn(self, handle: int):

@@ -1,4 +1,4 @@
-"""python -m engine.compiler MAPA.tmx [-o SALIDA.cworld] [--chunk-size 32] [--force]"""
+"""python -m engine.compiler MAPA.tmx [-o SALIDA.cworld] [--chunk-size 32] [--force] [--no-nav]"""
 
 import argparse
 import sys
@@ -14,11 +14,13 @@ def main(argv=None) -> int:
     parser.add_argument("--chunk-size", type=int, default=32, help="potencia de dos (por defecto 32)")
     parser.add_argument("--no-compression", action="store_true")
     parser.add_argument("--force", action="store_true", help="escribir aunque haya errores")
+    parser.add_argument("--no-nav", action="store_true", help="sin grafo de navegación")
     args = parser.parse_args(argv)
 
     out = args.out or args.map.with_suffix(".cworld")
     report = compile_tmx(args.map, out, args.chunk_size,
-                         compression="none" if args.no_compression else "zlib", force=args.force)
+                         compression="none" if args.no_compression else "zlib", force=args.force,
+                         nav=not args.no_nav)
     try:
         print(report.summary())
         if report.ok or args.force:

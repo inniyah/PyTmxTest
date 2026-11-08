@@ -386,6 +386,34 @@ def collect_lights(tmx: tm.TiledMap, world: World, cell_w: float, cell_h: float,
     return rows
 
 
+def collect_places(tmx: tm.TiledMap, report: Report):
+    """Rectángulos de clase "place" de las capas de objetos: (id, nombre, tipo, planta, x0, y0,
+    x1, y1) en celdas, [x0, x1) × [y0, y1). La planta es la del grupo (propiedad Z); el tipo, la
+    propiedad "kind" (casa, plaza, taberna…)."""
+    rows = []
+
+    def visit(layers, level):
+        for layer in layers:
+            if isinstance(layer, tm.LayerGroup):
+                z = layer.properties.get("Z")
+                visit(layer.layers, int(z.value) if z is not None else level)
+            elif isinstance(layer, tm.ObjectGroup):
+                for obj in layer.objects:
+                    if obj.type != "place":
+                        continue
+                    if obj.width <= 0 or obj.height <= 0:
+                        report.warnings.append(f"Lugar '{obj.name or obj.id}' sin área (debe ser un rectángulo)")
+                        continue
+                    x0, y0 = math.floor(obj.x / tmx.tilewidth), math.floor(obj.y / tmx.tileheight)
+                    x1 = math.ceil((obj.x + obj.width) / tmx.tilewidth)
+                    y1 = math.ceil((obj.y + obj.height) / tmx.tileheight)
+                    kind = str(obj.properties["kind"].value) if "kind" in obj.properties else "lugar"
+                    rows.append((len(rows) + 1, obj.name or f"lugar {obj.id}", kind, level, x0, y0, x1, y1))
+
+    visit(tmx.layers, 0)
+    return rows
+
+
 # --- 5. Columnas y chunks ------------------------------------------------------------
 
 def build_chunks(world: World, obstacles: np.ndarray, visual: np.ndarray, size: int):
@@ -420,7 +448,7 @@ def build_chunks(world: World, obstacles: np.ndarray, visual: np.ndarray, size: 
 # --- Todo junto ----------------------------------------------------------------------
 
 def compile_tmx(tmx_path, out_path, chunk_size: int = 32, compression: str = "zlib",
-                force: bool = False, materials: Materials = None) -> Report:
+                force: bool = False, materials: Materials = None, nav: bool = True) -> Report:
     t0 = time.perf_counter()
     tmx_path, out_path = Path(tmx_path), Path(out_path)
     if chunk_size <= 0 or chunk_size & (chunk_size - 1):
@@ -467,6 +495,9 @@ def compile_tmx(tmx_path, out_path, chunk_size: int = 32, compression: str = "zl
         lights = collect_lights(tmx, world, cell_w, cell_h, report)
         store.write_lights(lights)
         report.stats["luces"] = len(lights)
+        places = collect_places(tmx, report)
+        store.write_places(places)
+        report.stats["lugares"] = len(places)
         props = {k: p.value for ts in tmx.tilesets for k, p in ts.properties.items()}
         report.stats.update({
             "celdas_con_contenido": int(((obstacles != 0) | visual.any(-1)).sum()),
@@ -490,6 +521,17 @@ def compile_tmx(tmx_path, out_path, chunk_size: int = 32, compression: str = "zl
             "compiler_version": COMPILER_VERSION,
             "materials": materials.to_json(),
         })
+    if nav:
+        t_nav = time.perf_counter()
+        with SQLiteWorldStore(out_path, "a") as store:
+            from engine.nav import build_nav, write_nav
+            from engine.world.view import WorldView
+            nodes = build_nav(WorldView(store, with_visual=False))
+            write_nav(store, nodes, chunk_size)
+            report.stats["nav_nodos"] = int(len(nodes.x))
+            report.stats["nav_aristas"] = int((nodes.target >= 0).sum())
+            report.stats["nav_tiempo_s"] = round(time.perf_counter() - t_nav, 2)
+    with SQLiteWorldStore(out_path, "a") as store:
         report.stats["tiempo_s"] = round(time.perf_counter() - t0, 2)
         store.set_meta({"report": report.as_dict()})
     report.stats["tamaño_kb"] = round(out_path.stat().st_size / 1024, 1)

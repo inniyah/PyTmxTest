@@ -18,7 +18,7 @@ def worlds(tmp_path_factory, shared_tileset):
     build_gallery(out / "maps" / "gallery.tmx", tsx)
     build_course(out / "maps" / "course.tmx", tsx)
     for name in ("gallery", "course"):
-        report = compile_tmx(out / "maps" / f"{name}.tmx", out / f"{name}.cworld")
+        report = compile_tmx(out / "maps" / f"{name}.tmx", out / f"{name}.cworld", nav=False)
         assert report.ok and not report.warnings, report.summary()
     return {name: out / f"{name}.cworld" for name in ("gallery", "course")}
 
@@ -64,7 +64,7 @@ def test_horizontal_flip_swaps_u(worlds, tmp_path):
     layer = next(l for l in src.iter_layers() if isinstance(l, tm.TileLayer) and l.name == "suelo")
     layer.set_tile_gid(0, 0, layer.get_tile_gid(0, 0) | 0x80000000)
     src.save(worlds["course"].parent / "maps" / "flip.tmx")
-    compile_tmx(worlds["course"].parent / "maps" / "flip.tmx", tmp_path / "flip.cworld")
+    compile_tmx(worlds["course"].parent / "maps" / "flip.tmx", tmp_path / "flip.cworld", nav=False)
     a = chunk_quads(view.chunk(0, 0), geo, layout)[0].reshape(-1, 4, FLOATS_PER_VERTEX)
     v2 = WorldView(SQLiteWorldStore(tmp_path / "flip.cworld"))
     b = chunk_quads(v2.chunk(0, 0), geo, AtlasLayout.from_store(v2.store))[0].reshape(-1, 4, FLOATS_PER_VERTEX)
@@ -203,7 +203,7 @@ def test_flipped_tiles_flip_their_normals(gl_viewer_factory, tmp_path, shared_ti
     for x in (3.6, 6.6):
         b.light(0, x, 2.5, "#ffffff", radius=4.0, intensity=3.0, height=1.5)
     b.to_map(Path(tsx), tmp_path / "f.tmx", DEFAULT_PROJECTION).save(tmp_path / "f.tmx")
-    assert compile_tmx(tmp_path / "f.tmx", tmp_path / "f.cworld").ok
+    assert compile_tmx(tmp_path / "f.tmx", tmp_path / "f.cworld", nav=False).ok
     v = gl_viewer_factory(tmp_path / "f.cworld", 1000, 500, visible=False, player=False)
     try:
         v.set_night(True)

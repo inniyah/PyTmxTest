@@ -251,6 +251,31 @@ material de la celda y la lista en el mundo; el generador de terreno pinta hierb
 las casas y caminos entre las puertas. En el visor, la tecla G (o `--materials`) tiñe el suelo
 según su material.
 
+**Grafo de navegación** (`engine/nav`). El compilador lo construye con la misma física que mueve
+a los personajes (`--no-nav` para omitirlo): un nodo por cada superficie en la que se puede
+estar de pie en el centro de una celda (varios por columna: la calle bajo el puente y el
+tablero, las dos plantas de una casa) y aristas a los 8 vecinos si el recorrido entre centros
+no sube ni baja más de un escalón por tramo de 25 cm, tiene altura libre y no cruza paredes ni
+macizos (las diagonales, sin cortar esquinas). Guarda la holgura de nodos y aristas, y cada
+clase de tamaño usa las aristas en las que cabe su radio (`NavGraph.usable(radio)`). Los tests
+recorren aristas al azar con la física: lo que el grafo dice que se puede, se puede, y lo que
+no, no. En el terreno de 512 m: 65 766 nodos y 520 024 aristas en ≈ 7 s.
+
+**Lugares, costes y rutinas.** Los lugares son rectángulos de clase `place` en las capas de
+objetos de Tiled (propiedad `kind`: casa, plaza…); el compilador los guarda y el generador de
+terreno crea uno por casa y una plaza empedrada. El coste de cada arista es distancia ×
+material (con los ajustes de cada tipo en `types.json`: al perro el camino le da igual) ×
+pendiente (subir cuesta mucho más que bajar). Un campo de flujo por destino y tipo da a cada
+nodo su coste restante y por dónde seguir; las distancias se calculan solo con numpy
+(delta-stepping vectorizado, mismo resultado que Dijkstra, ≈ 50 ms en el terreno de 512 m), y
+la caché los calcula repartidos entre frames con un presupuesto de tiempo. Sin scipy: el juego
+no depende de nada más que numpy, Pillow, PyOpenGL y glfw. Con `--npcs N` en un mundo con grafo y casas, cada NPC tiene su casa y va
+a la plaza y vuelve: con costes, el 78 % del recorrido es camino (sin costes, el 15 %). Lejos
+de la cámara siguen su rutina sin física: dos veces por segundo avanzan por su camino según el
+tiempo, apoyados en el suelo, y al volver cerca siguen con física (3000 NPC lejanos ≈ 7 ms por
+segundo de juego). El generador traza los caminos con el mismo cálculo sobre la rejilla de
+celdas: evitan las pendientes, siguen las curvas de nivel y se unen en una red con ramales.
+
 **Mundo grande.** `tools/pieces/terrain.py` genera un terreno de alturas en las esquinas (tipo
 Populous: dos esquinas vecinas difieren como mucho en ¼ de planta) y lo convierte en piezas:
 cada casilla es una pieza entera o dos mitades partidas por una diagonal, y la superficie

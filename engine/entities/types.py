@@ -3,7 +3,7 @@
 import json
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 DEFAULT_TYPES = Path(__file__).resolve().parents[2] / "assets" / "actors" / "types.json"
 
@@ -22,12 +22,17 @@ class ActorType:
     jump_speed: float
     sheet: str
     tint: Tuple[float, float, float]
+    # Navegación (opcional): ajustes del coste de los materiales por nombre, y de la pendiente
+    material_costs: Optional[Dict[str, float]] = None
+    uphill: Optional[float] = None
+    downhill: Optional[float] = None
 
 
 def load_types(path=DEFAULT_TYPES) -> Dict[str, ActorType]:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     base = data.get("defecto", {})
     names = {f.name for f in fields(ActorType)} - {"name"}
+    optional = {"material_costs", "uphill", "downhill"}
     types = {}
     for name, values in data.items():
         if name.startswith("_") or name == "defecto":
@@ -36,7 +41,7 @@ def load_types(path=DEFAULT_TYPES) -> Dict[str, ActorType]:
         unknown = set(merged) - names
         if unknown:
             raise ValueError(f"Tipo '{name}': campos desconocidos {sorted(unknown)}")
-        missing = names - set(merged)
+        missing = names - optional - set(merged)
         if missing:
             raise ValueError(f"Tipo '{name}': faltan {sorted(missing)}")
         merged["tint"] = tuple(float(c) for c in merged["tint"])

@@ -16,7 +16,7 @@ def phys(tmp_path_factory, shared_tileset):
     out = tmp_path_factory.mktemp("phys")
     tsx = shared_tileset
     build_course(out / "course.tmx", tsx)
-    assert compile_tmx(out / "course.tmx", out / "course.cworld").ok
+    assert compile_tmx(out / "course.tmx", out / "course.cworld", nav=False).ok
     return WalkerPhysics(WorldView(SQLiteWorldStore(out / "course.cworld")))
 
 
@@ -120,7 +120,7 @@ def slope(tmp_path_factory, shared_tileset):
         b.put(level, x, y, f"floor_ramp_NE_{int(round(base * 100)):03d}")
     m = b.to_map(tsx, out / "slope.tmx", __import__("tools.pieces.render", fromlist=["x"]).DEFAULT_PROJECTION)
     m.save(out / "slope.tmx")
-    assert compile_tmx(out / "slope.tmx", out / "slope.cworld").ok
+    assert compile_tmx(out / "slope.tmx", out / "slope.cworld", nav=False).ok
     return WalkerPhysics(WorldView(SQLiteWorldStore(out / "slope.cworld")))
 
 

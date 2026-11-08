@@ -26,7 +26,7 @@ def gallery(tmp_path_factory, shared_tileset):
     tsx = shared_tileset
     tmx = out / "maps" / "gallery.tmx"
     build_gallery(tmx, tsx)
-    report = compile_tmx(tmx, out / "gallery.cworld", chunk_size=16)
+    report = compile_tmx(tmx, out / "gallery.cworld", chunk_size=16, nav=False)
     return tmx, out / "gallery.cworld", report
 
 
@@ -165,7 +165,7 @@ SPECS = {
 def compile_map(tmp_path, m, **kw):
     path = tmp_path / "m.tmx"
     m.save(path)
-    report = compile_tmx(path, tmp_path / "m.cworld", **kw)
+    report = compile_tmx(path, tmp_path / "m.cworld", **kw, nav=False)
     return report, (WorldView(SQLiteWorldStore(tmp_path / "m.cworld")) if report.ok else None)
 
 
@@ -230,8 +230,8 @@ def test_infinite_map_with_negative_coordinates(tmp_path):
 def test_compression_does_not_change_the_world(tmp_path):
     m = make_map({0: [{(x, y): "floor" for x in range(6) for y in range(5)}, {(2, 2): "wall_S"}]}, specs=SPECS)
     m.save(tmp_path / "m.tmx")
-    compile_tmx(tmp_path / "m.tmx", tmp_path / "a.cworld", compression="zlib")
-    compile_tmx(tmp_path / "m.tmx", tmp_path / "b.cworld", compression="none")
+    compile_tmx(tmp_path / "m.tmx", tmp_path / "a.cworld", compression="zlib", nav=False)
+    compile_tmx(tmp_path / "m.tmx", tmp_path / "b.cworld", compression="none", nav=False)
     ys, xs = np.mgrid[0:5, 0:6]
     a = WorldView(SQLiteWorldStore(tmp_path / "a.cworld")).cells(xs, ys, 0)
     b = WorldView(SQLiteWorldStore(tmp_path / "b.cworld")).cells(xs, ys, 0)

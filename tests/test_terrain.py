@@ -86,7 +86,7 @@ def test_every_possible_tile_is_reproduced_exactly():
 def terrain(tmp_path_factory, shared_tileset):
     out = tmp_path_factory.mktemp("terrain")
     build_terrain(out / "t.tmx", shared_tileset, 128, 128, houses=6, seed=5)
-    report = compile_tmx(out / "t.tmx", out / "t.cworld", chunk_size=16)
+    report = compile_tmx(out / "t.tmx", out / "t.cworld", chunk_size=16, nav=False)
     assert report.ok and not report.warnings, report.summary()
     return out / "t.cworld"
 
@@ -396,7 +396,7 @@ def test_worlds_with_narrow_borders_load_without_mipmaps(tmp_path, shared_tilese
     import engine.compiler.compile as comp
     monkeypatch.setattr(comp, "ATLAS_BORDER", 1)
     build_terrain(tmp_path / "t.tmx", shared_tileset, 32, 32, houses=1, seed=2)
-    assert compile_tmx(tmp_path / "t.tmx", tmp_path / "t.cworld").ok
+    assert compile_tmx(tmp_path / "t.tmx", tmp_path / "t.cworld", nav=False).ok
     from engine.viewer import Viewer
     v = Viewer(tmp_path / "t.cworld", 320, 200, visible=False, spawn=(16, 16), npcs=0)
     try:
