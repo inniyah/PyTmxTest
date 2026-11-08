@@ -74,6 +74,7 @@ layout(location = 1) in vec2 a_uv;
 layout(location = 2) in vec3 a_origin;    // origen de la celda en metros (X este, Y arriba, Z sur)
 layout(location = 3) in float a_alpha;
 layout(location = 4) in float a_flip;
+layout(location = 5) in float a_material;
 
 uniform mat4 u_projection;
 
@@ -81,6 +82,7 @@ out vec2 v_uv;
 out vec3 v_origin;
 out float v_alpha;
 out float v_flip;
+flat out int v_material;
 out float v_screen_y;             // posición en pantalla del píxel, en píxeles de mundo
 out vec2 v_pos;
 
@@ -91,6 +93,7 @@ void main() {
     v_screen_y = a_pos.y;
     v_pos = a_pos;
     v_flip = a_flip;
+    v_material = int(a_material + 0.5);
     gl_Position = u_projection * vec4(a_pos, 0.0, 1.0);
 }
 """
@@ -98,6 +101,7 @@ void main() {
 TILE_FRAGMENT = """
 #version 330 core
 in float v_flip;
+flat in int v_material;
 in vec2 v_uv;
 in vec3 v_origin;
 in float v_alpha;
@@ -123,6 +127,8 @@ uniform sampler2D u_normal;
 uniform float u_lod;              // nivel reducido del color, albedo y normales según el zoom
 uniform int u_has_albedo;
 uniform int u_has_normal;
+uniform int u_material_tint;      // 1: teñir el suelo según su material (depuración)
+uniform vec3 u_material_colors[16];
 uniform float u_cell_w;
 """ + LIGHTING_GLSL + """
 out vec4 frag;
@@ -161,8 +167,12 @@ void main() {
             n = normalize(n);
         }
         if (v_flip > 0.5) local.x = u_cell_w - local.x;
+        if (u_material_tint == 1 && v_material > 0 && n.y > 0.5)
+            base = mix(base, u_material_colors[v_material], 0.75);
         rgb = to_srgb(to_linear(base) * light_at(v_origin + local, n, 0.0));
     }
+    if (u_lighting == 0 && u_material_tint == 1 && v_material > 0)
+        rgb = mix(rgb, u_material_colors[v_material], 0.75);
     if (u_height_tint == 1) rgb *= clamp(0.78 + 0.11 * height / u_cell_h, 0.55, 1.35);
     frag = (u_show_depth == 1) ? vec4(vec3(1.0 - depth), 1.0) : vec4(rgb, alpha);
 }

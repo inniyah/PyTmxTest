@@ -1,0 +1,3 @@
+# Pieza material_roca: metros, X este, Y arriba, Z sur
+mtllib pieces.mtl
+o material_roca

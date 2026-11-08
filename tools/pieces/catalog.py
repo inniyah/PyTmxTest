@@ -17,6 +17,7 @@ class Piece:
     category: str
     layer: str         # floor, object u overhead
     spec: CellSpec
+    material: str = None   # material del suelo (los marcadores solo llevan esto, sin geometría)
 
 
 def _h(x: float) -> str:
@@ -24,6 +25,7 @@ def _h(x: float) -> str:
 
 
 def build_catalog() -> List[Piece]:
+    from engine.world.materials import load_materials
     pieces: List[Piece] = []
 
     # Suelos de celda entera: planos, rampas rectas (escaleras), diagonales y pendientes suaves
@@ -68,4 +70,8 @@ def build_catalog() -> List[Piece]:
 
     names = [p.name for p in pieces]
     assert len(names) == len(set(names)), "nombres de pieza repetidos"
+    # Marcadores de material: sin geometría ni imagen visible; se pintan encima del suelo, en una
+    # capa aparte, y en cada celda cuenta el peor material de todos sus tiles
+    for name in load_materials().names:
+        pieces.append(Piece(f"material_{name}", "materiales", "floor", CellSpec(), material=name))
     return pieces

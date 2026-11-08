@@ -1,5 +1,5 @@
 <?xml version='1.0' encoding='utf-8'?>
-<map version="1.10" tiledversion="1.11.0" orientation="orthogonal" renderorder="right-down" width="31" height="64" tilewidth="128" tileheight="92" infinite="0" nextlayerid="6" nextobjectid="219">
+<map version="1.10" tiledversion="1.11.0" orientation="orthogonal" renderorder="right-down" width="31" height="67" tilewidth="128" tileheight="92" infinite="0" nextlayerid="6" nextobjectid="227">
  <properties>
   <property name="level_height" type="int" value="133" />
  </properties>
@@ -8,7 +8,7 @@
   <properties>
    <property name="Z" type="int" value="0" />
   </properties>
-  <layer id="2" name="suelo" class="floor" width="31" height="64">
+  <layer id="2" name="suelo" class="floor" width="31" height="67">
    <data encoding="csv">
 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
 1,1,1,2,1,3,1,4,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
@@ -73,10 +73,13 @@
 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+1,219,1,220,1,221,1,222,1,223,1,224,1,225,1,226,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1
 </data>
   </layer>
-  <layer id="3" name="piezas" class="object" width="31" height="64">
+  <layer id="3" name="piezas" class="object" width="31" height="67">
    <data encoding="csv">
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
@@ -141,10 +144,13 @@
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 </data>
   </layer>
-  <layer id="4" name="techos" class="overhead" width="31" height="64">
+  <layer id="4" name="techos" class="overhead" width="31" height="67">
    <data encoding="csv">
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
@@ -208,6 +214,9 @@
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,204,0,205,0,206,0,207,0,208,0,209,0,210,0,211,0,212,0,213,0,214,0,215,0,216,0,217,0,218,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 </data>
@@ -867,6 +876,30 @@
   </object>
   <object id="218" name="ceiling_sw_025" x="3648" y="5706" width="256" height="16">
    <text pixelsize="12" wrap="1" halign="center">ceiling_sw_025</text>
+  </object>
+  <object id="219" name="material_barro" x="64" y="5982" width="256" height="16">
+   <text pixelsize="12" wrap="1" halign="center">material_barro</text>
+  </object>
+  <object id="220" name="material_arena" x="320" y="5982" width="256" height="16">
+   <text pixelsize="12" wrap="1" halign="center">material_arena</text>
+  </object>
+  <object id="221" name="material_roca" x="576" y="5982" width="256" height="16">
+   <text pixelsize="12" wrap="1" halign="center">material_roca</text>
+  </object>
+  <object id="222" name="material_hierba" x="832" y="5982" width="256" height="16">
+   <text pixelsize="12" wrap="1" halign="center">material_hierba</text>
+  </object>
+  <object id="223" name="material_tierra" x="1088" y="5982" width="256" height="16">
+   <text pixelsize="12" wrap="1" halign="center">material_tierra</text>
+  </object>
+  <object id="224" name="material_suelo" x="1344" y="5982" width="256" height="16">
+   <text pixelsize="12" wrap="1" halign="center">material_suelo</text>
+  </object>
+  <object id="225" name="material_camino" x="1600" y="5982" width="256" height="16">
+   <text pixelsize="12" wrap="1" halign="center">material_camino</text>
+  </object>
+  <object id="226" name="material_adoquin" x="1856" y="5982" width="256" height="16">
+   <text pixelsize="12" wrap="1" halign="center">material_adoquin</text>
   </object>
  </objectgroup>
 </map>

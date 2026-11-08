@@ -15,10 +15,11 @@ from typing import Dict
 import numpy as np
 from PIL import Image
 
+from engine.world import cell as C
 from engine.world import visual as V
 from engine.world.chunk import ChunkData
 
-FLOATS_PER_VERTEX = 9
+FLOATS_PER_VERTEX = 10     # pos (2), uv (2), origen (3), opacidad, volteo, material
 
 
 @dataclass(frozen=True)
@@ -115,6 +116,7 @@ def chunk_quads(chunk: ChunkData, geo: WorldGeometry, atlas: AtlasLayout) -> Dic
     origin = np.stack([x * geo.cell_w, lv * geo.cell_h, y * geo.cell_w], axis=1).astype(float)
     alpha = V.opacity(values)
     flip = V.flipped(values)
+    material = ((chunk.obstacles[cell] >> C.MATERIAL_SHIFT) & C.MATERIAL_MASK).astype(np.float32)
 
     order = np.lexsort((slot, geo.closeness(lv * geo.cell_h, (y + 1) * geo.cell_w)))
     out = {}
@@ -137,5 +139,6 @@ def chunk_quads(chunk: ChunkData, geo: WorldGeometry, atlas: AtlasLayout) -> Dic
         verts[:, :, 4:7] = origin[sel][:, None, :]
         verts[:, :, 7] = alpha[sel][:, None]
         verts[:, :, 8] = flip[sel][:, None]
+        verts[:, :, 9] = material[sel][:, None]
         out[int(page)] = verts.reshape(-1, FLOATS_PER_VERTEX)
     return out

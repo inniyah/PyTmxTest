@@ -13,6 +13,7 @@ from tools.pieces.render import Projection, render
 
 PROJ = Projection()
 CATALOG = build_catalog()
+GEOMETRIC = [p for p in CATALOG if not p.material]          # los marcadores de material no tienen
 
 
 def faces_of(spec):
@@ -20,11 +21,13 @@ def faces_of(spec):
 
 
 def test_catalog():
-    assert len(CATALOG) == 218
+    assert len(GEOMETRIC) == 218
+    markers = [p for p in CATALOG if p.material]
+    assert len(markers) == 8 and all(p.spec == CellSpec() for p in markers)
     assert {p.layer for p in CATALOG} == {"floor", "object", "overhead"}
 
 
-@pytest.mark.parametrize("piece", CATALOG, ids=lambda p: p.name)
+@pytest.mark.parametrize("piece", GEOMETRIC, ids=lambda p: p.name)
 def test_meshes_are_closed_and_point_outwards(piece):
     mesh = mesh_for(piece.spec)
     lo, hi = mesh.bounds()
@@ -118,7 +121,7 @@ def test_gallery_loads_in_the_engine_world(built):
     assert (w.tiles[0, :, :, 0] != 0).all()                       # todo el suelo cubierto
 
 
-@pytest.mark.parametrize("piece", CATALOG, ids=lambda p: p.name)
+@pytest.mark.parametrize("piece", GEOMETRIC, ids=lambda p: p.name)
 def test_every_face_has_a_valid_outward_normal(piece):
     """Una cara con vértices alineados al principio daba normal indefinida y no se dibujaba."""
     from tools.pieces.mesh import newell_normal

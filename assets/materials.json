@@ -1,0 +1,14 @@
+{
+  "_comentario": "Materiales del suelo, ORDENADOS DE PEOR A MEJOR. Si en una celda hay varios tiles con material (por ejemplo, hierba y encima barro con transparencia), cuenta el peor. El código de cada material en el formato de celda es su posición + 1 (0 = sin material: se usa 'sin_material'). Como mucho 15. 'cost' es el coste de andar por él (multiplica la distancia; los tipos de personaje pueden ajustarlo) y 'color' solo sirve para depurar (tecla G del visor).",
+  "materiales": [
+    {"name": "barro",   "cost": 3.0,  "color": "#5a3f24"},
+    {"name": "arena",   "cost": 2.0,  "color": "#e0cc8a"},
+    {"name": "roca",    "cost": 1.8,  "color": "#8a8a90"},
+    {"name": "hierba",  "cost": 1.4,  "color": "#5fa33e"},
+    {"name": "tierra",  "cost": 1.2,  "color": "#9a7445"},
+    {"name": "suelo",   "cost": 1.0,  "color": "#c8b48c"},
+    {"name": "camino",  "cost": 0.8,  "color": "#d6a35a"},
+    {"name": "adoquin", "cost": 0.75, "color": "#b0b4c0"}
+  ],
+  "sin_material": {"cost": 1.0, "color": "#ffffff"}
+}

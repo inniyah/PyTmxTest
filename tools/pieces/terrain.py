@@ -24,7 +24,7 @@ from .catalog import build_catalog
 from .render import DEFAULT_PROJECTION, Projection
 
 QUARTERS_PER_LEVEL = 4
-LAYER_CLASS = {"suelo": "floor", "piezas": "object", "techos": "overhead"}
+LAYER_CLASS = {"suelo": "floor", "piezas": "object", "techos": "overhead", "materiales": "floor"}
 
 
 # --- 1. Alturas -------------------------------------------------------------------------
@@ -183,8 +183,11 @@ class GridBuilder:
         self.lights: Dict[int, list] = {}
 
     def put(self, level: int, x: int, y: int, name: str):
-        base = "piezas" if name.startswith(("fill_", "wall_")) else \
-            {"floor": "suelo", "object": "piezas", "overhead": "techos"}[self.pieces[name].layer]
+        if name.startswith("material_"):
+            base = "materiales"
+        else:
+            base = "piezas" if name.startswith(("fill_", "wall_")) else \
+                {"floor": "suelo", "object": "piezas", "overhead": "techos"}[self.pieces[name].layer]
         stack = self.layers.setdefault((level, base), [])
         for arr in stack:
             if arr[y, x] == 0:
@@ -210,7 +213,7 @@ class GridBuilder:
                                   properties={"Z": tm.Property("Z", "int", level)},
                                   offsety=-level * proj.level_h)
             next_id += 1
-            for base in ("suelo", "piezas", "techos"):
+            for base in ("suelo", "piezas", "techos", "materiales"):
                 for k, arr in enumerate(self.layers.get((level, base), [])):
                     layer = tm.create_layer(base if k == 0 else f"{base}{k + 1}", self.width, self.depth)
                     layer.id, next_id = next_id, next_id + 1
@@ -263,13 +266,51 @@ def place_house(b: GridBuilder, x0: int, y0: int, w: int, d: int, level: int, rn
     b.light(level, x0 + w / 2, y0 + d / 2, "#ffe2b8", radius=5.0, intensity=1.4)
     b.light(level + 1, x0 + w / 2 - 1, y0 + d / 2, "#ffb070", radius=5.0, intensity=1.2)
     b.light(level, door + 0.5, y1 + 1.6, "#ffcf8a", radius=6.0, intensity=1.5)
-    return stairs
+    for y in range(y0, y1 + 1):                    # suelo de madera o piedra dentro, en las dos plantas
+        for x in range(x0, x1 + 1):
+            b.put(level, x, y, "material_suelo")
+            if (x, y) not in stairs:
+                b.put(level + 1, x, y, "material_suelo")
+    return stairs, (door, y1 + 1)
+
+
+def road_cells(doors, width: int, depth: int, road_width: int = 2) -> set:
+    """Caminos entre las puertas: árbol de distancia mínima (Prim) y, para cada par, una línea
+    de ``road_width`` celdas de ancho."""
+    if len(doors) < 2:
+        return set()
+    pts = np.array(doors, float)
+    linked = {0}
+    edges = []
+    while len(linked) < len(pts):
+        best = None
+        for i in linked:
+            d = np.hypot(*(pts - pts[i]).T)
+            d[list(linked)] = np.inf
+            j = int(np.argmin(d))
+            if best is None or d[j] < best[0]:
+                best = (d[j], i, j)
+        edges.append(best[1:])
+        linked.add(best[2])
+    cells = set()
+    for i, j in edges:
+        (x0, y0), (x1, y1) = pts[i], pts[j]
+        steps = int(max(abs(x1 - x0), abs(y1 - y0))) + 1
+        for t in np.linspace(0, 1, steps * 2):
+            x, y = int(round(x0 + (x1 - x0) * t)), int(round(y0 + (y1 - y0) * t))
+            for dx in range(road_width):
+                for dy in range(road_width):
+                    if 0 <= x + dx < width and 0 <= y + dy < depth:
+                        cells.add((x + dx, y + dy))
+    return cells
 
 
 @dataclass
 class TerrainInfo:
     heights: np.ndarray
     plots: list
+    road: set = None
+    doors: list = None
 
 
 def build_terrain(tmx_path: Path, tsx_path: Path, width: int = 256, depth: int = 256,
@@ -281,19 +322,28 @@ def build_terrain(tmx_path: Path, tsx_path: Path, width: int = 256, depth: int =
     H = flatten_plots(H, plots)
     b = GridBuilder(width, depth, pieces)
 
-    stairs_cells = {}
+    stairs_cells, doors, inside = {}, [], set()
     for x, y, w, d in plots:
         level = int(H[y, x]) // QUARTERS_PER_LEVEL
-        for cell in place_house(b, x + 1, y + 1, w - 2, d - 2, level, rng):
+        stairs, door = place_house(b, x + 1, y + 1, w - 2, d - 2, level, rng)
+        for cell in stairs:
             stairs_cells[cell] = level
+        doors.append(door)
+        inside |= {(cx, cy) for cx in range(x + 1, x + w - 1) for cy in range(y + 1, y + d - 1)}
+    road = road_cells(doors, width, depth) - inside
 
     # Terreno: cada casilla, sus piezas (las de la escalera de las casas la sustituyen)
     for y in range(depth):
         for x in range(width):
             if (x, y) in stairs_cells:
                 continue
-            for level, name in tile_pieces(int(H[y, x]), int(H[y, x + 1]), int(H[y + 1, x]), int(H[y + 1, x + 1])):
+            pieces = tile_pieces(int(H[y, x]), int(H[y, x + 1]), int(H[y + 1, x]), int(H[y + 1, x + 1]))
+            for level, name in pieces:
                 b.put(level, x, y, name)
+            if (x, y) not in inside:
+                material = "material_camino" if (x, y) in road else "material_hierba"
+                for level in sorted({lv for lv, name in pieces if name.startswith("floor")}):
+                    b.put(level, x, y, material)
     for (x, y), lv in stairs_cells.items():
         name = "floor_ramp_N_000" if (x, y + 1) not in stairs_cells else "floor_ramp_N_050"
         b.put(lv, x, y, name)
@@ -307,4 +357,4 @@ def build_terrain(tmx_path: Path, tsx_path: Path, width: int = 256, depth: int =
     m = b.to_map(tsx_path, tmx_path, proj)
     tmx_path.parent.mkdir(parents=True, exist_ok=True)
     m.save(tmx_path, encoding="base64", compression="zlib")
-    return TerrainInfo(H, plots)
+    return TerrainInfo(H, plots, road, doors)

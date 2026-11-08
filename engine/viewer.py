@@ -8,7 +8,8 @@ Controles: WASD/flechas: andar (sin personaje, mover la vista) · Espacio: salta
 arrastrar con el ratón: mover la vista (deja de seguir al personaje; F vuelve a seguirlo) ·
 rueda o +/-: zoom · PgUp/PgDn: planta más alta que se dibuja · C: cómo ocultar lo que hay
 encima del personaje (círculo, planta entera o nada) · L: iluminación sí/no · N: día/noche ·
-K: farol · T: tinte por altura · P: profundidad por píxel · M: sin mapas de albedo y normales
+K: farol · T: tinte por altura · G: tinte por material del suelo · P: profundidad por píxel ·
+M: sin mapas de albedo y normales
 (diagnóstico de rendimiento) · Inicio: centrar · ESC: salir.
 """
 
@@ -173,6 +174,8 @@ class Viewer:
                 self.lantern = not self.lantern
             elif key == glfw.KEY_M:
                 r.use_material_maps = not r.use_material_maps
+            elif key == glfw.KEY_G:
+                r.material_tint = not r.material_tint
             elif key == glfw.KEY_F and self.player is not None:
                 self.follow = True
             elif key == glfw.KEY_SPACE and self.player is not None:
@@ -396,7 +399,7 @@ class Viewer:
                     f"{' (activo)' if r.cut_level is not None else ''}"
                     f" · luz {'de noche' if self.night else 'de día'}{'' if r.lighting.enabled else ' (apagada)'}"
                     f"{' · TINTE' if r.height_tint else ''}{' · PROFUNDIDAD' if r.show_depth else ''}"
-                    f"{'' if r.use_material_maps else ' · SIN MAPAS'}")
+                    f"{'' if r.use_material_maps else ' · SIN MAPAS'}{' · MATERIALES' if r.material_tint else ''}")
                 title_at, frames = now, 0
 
     def close(self):
@@ -423,6 +426,7 @@ def main(argv=None) -> int:
     parser.add_argument("--seed", type=int, help="semilla de la aparición y del paseo de los NPC")
     parser.add_argument("--no-vsync", action="store_true", help="sin sincronía vertical (medir fps reales)")
     parser.add_argument("--tint", action="store_true", help="empezar con el tinte por altura")
+    parser.add_argument("--materials", action="store_true", help="empezar con el tinte por material")
     parser.add_argument("--cut", choices=CUT_MODES, default=CUT_MODES[0],
                         help="cómo ocultar lo que hay encima del personaje")
     parser.add_argument("--night", action="store_true", help="empezar de noche")
@@ -446,6 +450,7 @@ def main(argv=None) -> int:
             viewer.home()
         viewer.renderer.show_depth = args.depth
         viewer.renderer.height_tint = args.tint
+        viewer.renderer.material_tint = args.materials
         viewer.cut_mode = CUT_MODES.index(args.cut)
         viewer.set_night(args.night)
         viewer.renderer.lighting.enabled = not args.no_lighting

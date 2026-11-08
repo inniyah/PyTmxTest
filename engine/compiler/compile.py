@@ -15,6 +15,7 @@ El compilador es una herramienta: puede depender de Tiled y del visor antiguo. E
 solo lee el resultado.
 """
 
+import copy
 import io
 import math
 import time
@@ -36,6 +37,7 @@ from engine.world import cell as C
 from engine.world import visual as V
 from engine.world.cellspec import CellConflict, CellSpec
 from engine.world.chunk import ChunkData
+from engine.world.materials import Materials, load_materials
 from engine.world.store import FORMAT_VERSION, SQLiteWorldStore
 
 COMPILER_VERSION = "0.1"
@@ -84,6 +86,91 @@ def tile_specs(tmx: tm.TiledMap, report: Report) -> Dict[int, CellSpec]:
             except (ValueError, KeyError) as e:
                 report.errors.append(f"Tileset '{ts.name}', tile {tile_id}: {e}")
     return specs
+
+
+# --- Materiales del suelo ------------------------------------------------------------
+
+def tile_materials(tmx: tm.TiledMap, materials: Materials, report: Report):
+    """(GID -> código de material, GIDs que SOLO llevan material: marcadores sin geometría)."""
+    codes, markers = {}, set()
+    for ts in tmx.tilesets:
+        for tile_id, tile in ts.tiles.items():
+            prop = tile.properties.get("material")
+            if prop is None:
+                continue
+            gid = ts.firstgid + tile_id
+            try:
+                codes[gid] = materials.code(str(prop.value))
+            except KeyError as e:
+                report.errors.append(f"Tileset '{ts.name}', tile {tile_id}: {e}")
+                continue
+            if not any(k in tile.properties for k in SPEC_KEYS):
+                markers.add(gid)
+    return codes, markers
+
+
+def _tile_layers(tmx: tm.TiledMap):
+    """Todas las capas de tiles (también dentro de grupos)."""
+    def walk(layers):
+        for layer in layers:
+            if isinstance(layer, tm.LayerGroup):
+                yield from walk(layer.layers)
+            elif isinstance(layer, tm.TileLayer):
+                yield layer
+    return list(walk(tmx.layers))
+
+
+def cell_materials(tmx: tm.TiledMap, world: World, codes: Dict[int, int]) -> np.ndarray:
+    """(H, D, W) uint8: el PEOR material (código menor) de los tiles de cada celda, 0 si ninguno.
+    Se lee de las capas tal cual, antes de juntar los tiles en huecos: los marcadores no ocupan
+    ninguno."""
+    out = np.zeros((world.H, world.D, world.W), np.uint8)
+    if not codes:
+        return out
+    table = np.zeros(max(codes) + 1, np.uint8)
+    for gid, code in codes.items():
+        table[gid] = code
+    entries = World._collect_layers(world, tmx)
+    for (layer, level, _role, _opacity, _name) in entries:
+        z = level + world.level_offset
+        gids = np.frombuffer(layer.dense_tiles(world.origin_x, world.origin_y, world.W, world.D),
+                             np.uint32).reshape(world.D, world.W) & GID_MASK
+        code = table[np.minimum(gids, len(table) - 1)] * (gids < len(table))
+        mine = out[z]
+        out[z] = np.where(code == 0, mine, np.where(mine == 0, code, np.minimum(mine, code)))
+    return out
+
+
+def strip_markers(tmx: tm.TiledMap, markers) -> int:
+    """Quita del mapa (en memoria) los tiles que solo llevan material. Devuelve cuántos."""
+    if not markers:
+        return 0
+    marker_ids = np.array(sorted(markers), np.uint32)
+    removed = 0
+
+    def clean(tiles):
+        nonlocal removed
+        arr = np.frombuffer(tiles, np.uint32).copy()
+        hit = np.isin(arr & GID_MASK, marker_ids)
+        if hit.any():
+            removed += int(hit.sum())
+            arr[hit] = 0
+            return tm.array.array("I", arr.tolist())
+        return tiles
+    for layer in _tile_layers(tmx):
+        if layer.is_infinite:
+            for ch in layer.data.chunks:
+                ch.tiles = clean(ch.tiles)
+        else:
+            layer.data.tiles = clean(layer.data.tiles)
+    return removed
+
+
+def apply_materials(obstacles: np.ndarray, materials_by_cell: np.ndarray) -> np.ndarray:
+    """Guarda el material en las celdas con suelo (en las demás no significa nada)."""
+    has_floor = (C.floor_code(obstacles, 1) != C.FLOOR_NONE) | (C.floor_code(obstacles, 2) != C.FLOOR_NONE)
+    code = np.where(has_floor, materials_by_cell, 0).astype(np.uint32)
+    return (obstacles & ~np.uint32(C.MATERIAL_MASK << C.MATERIAL_SHIFT)) | (code << np.uint32(C.MATERIAL_SHIFT))
 
 
 def _positions(mask: np.ndarray, world: World) -> str:
@@ -201,8 +288,9 @@ def build_atlas(tmx: tm.TiledMap, tmx_path: Path, used_gids: np.ndarray, report:
     """(tabla GID -> región, filas de regiones, páginas {(página, tipo): png})."""
     images = load_tileset_images(tmx, tmx_path)
     extras = _tileset_extra_maps(tmx, tmx_path)
-    gids = [int(g) for g in used_gids if int(g) in images]
-    missing = sorted(set(int(g) for g in used_gids) - set(gids))
+    gids = [int(g) for g in used_gids if int(g) in images
+            and np.asarray(images[int(g)].convert("RGBA"))[..., 3].any()]     # sin nada visible: fuera
+    missing = sorted(int(g) for g in used_gids if int(g) not in images)
     if missing:
         report.warnings.append(f"GIDs sin imagen (no se dibujan): {missing[:MAX_LISTED]}")
 
@@ -332,7 +420,7 @@ def build_chunks(world: World, obstacles: np.ndarray, visual: np.ndarray, size: 
 # --- Todo junto ----------------------------------------------------------------------
 
 def compile_tmx(tmx_path, out_path, chunk_size: int = 32, compression: str = "zlib",
-                force: bool = False) -> Report:
+                force: bool = False, materials: Materials = None) -> Report:
     t0 = time.perf_counter()
     tmx_path, out_path = Path(tmx_path), Path(out_path)
     if chunk_size <= 0 or chunk_size & (chunk_size - 1):
@@ -340,6 +428,10 @@ def compile_tmx(tmx_path, out_path, chunk_size: int = 32, compression: str = "zl
     report = Report()
 
     tmx = tm.TiledMap.load(tmx_path)
+    materials = materials if materials is not None else load_materials()
+    codes, markers = tile_materials(tmx, materials, report)
+    original = copy.deepcopy(tmx) if markers else tmx
+    report.stats["marcadores_de_material"] = strip_markers(tmx, markers)
     world = World(tmx)
     if world.dropped_tiles:
         report.warnings.append(f"{world.dropped_tiles} tiles descartados por celdas con más de 4")
@@ -350,6 +442,7 @@ def compile_tmx(tmx_path, out_path, chunk_size: int = 32, compression: str = "zl
     values, south, east = cell_values(world, specs, report)
     obstacles = transfer_walls(values, south, east)
     check_overflow(world, obstacles, report)
+    obstacles = apply_materials(obstacles, cell_materials(original, world, codes))
 
     used = np.unique(world.tiles & GID_MASK)
     region_of_gid, regions, pages = build_atlas(tmx, tmx_path, used[used != 0], report)
@@ -395,6 +488,7 @@ def compile_tmx(tmx_path, out_path, chunk_size: int = 32, compression: str = "zl
             "solid_value": C.CELL_SOLID,
             "source": str(tmx_path), "compiled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "compiler_version": COMPILER_VERSION,
+            "materials": materials.to_json(),
         })
         report.stats["tiempo_s"] = round(time.perf_counter() - t0, 2)
         store.set_meta({"report": report.as_dict()})

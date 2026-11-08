@@ -68,12 +68,19 @@ def test_gallery_compiles_cleanly(gallery):
     assert report.stats["chunks"] == expected
 
 
+def _markers(m):
+    """GIDs de los marcadores de material (sin geometría ni imagen visible)."""
+    return {ts.firstgid + tid for ts in m.tilesets for tid, t in ts.tiles.items()
+            if "material" in t.properties and "piece" in t.properties
+            and str(t.properties["piece"].value).startswith("material_")}
+
+
 def test_every_cell_matches_an_independent_computation(gallery):
     tmx, world_path, _ = gallery
     m, layers, expected = expected_values(tmx)
     view = WorldView(SQLiteWorldStore(world_path))
     ys, xs = np.mgrid[0:m.height, 0:m.width]
-    got = view.cells(xs, ys, 0)
+    got = view.cells(xs, ys, 0) & np.uint32(C.GEOMETRY_MASK)       # el material va aparte
     assert np.array_equal(got, expected.astype(np.uint32))
     assert (C.wall_n(got).sum(), C.wall_w(got).sum()) == (C.wall_n(expected).sum(), C.wall_w(expected).sum())
     # huecos visuales: tantos como tiles, con el rol de su capa
@@ -81,7 +88,8 @@ def test_every_cell_matches_an_independent_computation(gallery):
     role_of_layer = {"floor": V.ROLE_FLOOR, "object": V.ROLE_OBJECT, "overhead": V.ROLE_OVERHEAD}
     for y in range(m.height):
         for x in range(m.width):
-            tiles = [(l, l.get_tile_gid(x, y)) for l in layers if l.get_tile_gid(x, y)]
+            tiles = [(l, l.get_tile_gid(x, y)) for l in layers
+                     if l.get_tile_gid(x, y) and (l.get_tile_gid(x, y) & 0x0FFFFFFF) not in _markers(m)]
             used = [s for s in slots[y, x] if V.region(s)]
             assert len(used) == len(tiles)
             assert [int(V.role(s)) for s in used] == [role_of_layer[l.klass] for l, _ in tiles]
@@ -105,7 +113,7 @@ def test_atlas_regions_reproduce_the_tile_images(gallery):
         for y in range(m.height):
             for x in range(m.width):
                 g = layer.get_tile_gid(x, y) & 0x0FFFFFFF
-                if not g:
+                if not g or g in _markers(m):                   # marcadores: invisibles, sin región
                     continue
                 rid = next(int(V.region(s)) for s in slots[y, x] if V.role(s) == role)
                 _, _, rx, ry, w, h, _ = regions[rid]
@@ -114,7 +122,7 @@ def test_atlas_regions_reproduce_the_tile_images(gallery):
                              col * ts.tilewidth:(col + 1) * ts.tilewidth]
                 assert np.array_equal(page[ry:ry + h, rx:rx + w], tile)
                 checked.add(g)
-    assert len(checked) == ts.tilecount == len(regions)          # las 106 regiones comprobadas
+    assert len(checked) == ts.tilecount - len(_markers(m)) == len(regions)   # todas las piezas visibles
     assert set(store.atlas_kinds()) == {"color", "albedo", "normal", "position"}
 
 

@@ -1,5 +1,5 @@
 <?xml version='1.0' encoding='utf-8'?>
-<tileset version="1.10" tiledversion="1.11.0" name="pieces" tilewidth="128" tileheight="259" tilecount="218" columns="16">
+<tileset version="1.10" tiledversion="1.11.0" name="pieces" tilewidth="128" tileheight="259" tilecount="226" columns="16">
  <properties>
   <property name="cell_width_m" type="float" value="2" />
   <property name="cell_height_m" type="float" value="3" />
@@ -10,7 +10,7 @@
   <property name="albedo_map" value="pieces.a.png" />
   <property name="position_range_m" value="x 0 2; y 0 3.75; z 0 2" />
  </properties>
- <image source="pieces.png" width="2048" height="3626" />
+ <image source="pieces.png" width="2048" height="3885" />
  <tile id="0" class="floor">
   <properties>
    <property name="piece" value="floor_flat_000" />
@@ -1473,6 +1473,54 @@
    <property name="piece" value="ceiling_sw_025" />
    <property name="ceiling" value="0.25" />
    <property name="ceiling_part" value="sw" />
+  </properties>
+ </tile>
+ <tile id="218" class="floor">
+  <properties>
+   <property name="piece" value="material_barro" />
+   <property name="material" value="barro" />
+  </properties>
+ </tile>
+ <tile id="219" class="floor">
+  <properties>
+   <property name="piece" value="material_arena" />
+   <property name="material" value="arena" />
+  </properties>
+ </tile>
+ <tile id="220" class="floor">
+  <properties>
+   <property name="piece" value="material_roca" />
+   <property name="material" value="roca" />
+  </properties>
+ </tile>
+ <tile id="221" class="floor">
+  <properties>
+   <property name="piece" value="material_hierba" />
+   <property name="material" value="hierba" />
+  </properties>
+ </tile>
+ <tile id="222" class="floor">
+  <properties>
+   <property name="piece" value="material_tierra" />
+   <property name="material" value="tierra" />
+  </properties>
+ </tile>
+ <tile id="223" class="floor">
+  <properties>
+   <property name="piece" value="material_suelo" />
+   <property name="material" value="suelo" />
+  </properties>
+ </tile>
+ <tile id="224" class="floor">
+  <properties>
+   <property name="piece" value="material_camino" />
+   <property name="material" value="camino" />
+  </properties>
+ </tile>
+ <tile id="225" class="floor">
+  <properties>
+   <property name="piece" value="material_adoquin" />
+   <property name="material" value="adoquin" />
   </properties>
  </tile>
 </tileset>

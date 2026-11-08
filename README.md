@@ -241,6 +241,16 @@ miran delante para no caerse por un borde ni chocar con algo alto, y giran si se
 Todos se dibujan en dos llamadas (sombras y sprites). Coste por paso de 60 Hz, con física,
 contactos y comportamiento: ≈ 1.8 ms con 50 personajes, ≈ 3.4 ms con 150.
 
+**Materiales del suelo.** `assets/materials.json` lista los materiales ordenados de peor a
+mejor (barro, arena, roca, hierba, tierra, suelo, camino, adoquín), con su coste de andar y un
+color de depuración. Un tile declara su material con la propiedad `material`; si en una celda
+hay varios (por ejemplo, hierba y encima barro con transparencia), cuenta el peor. Los
+marcadores de material (piezas `material_*`, sin geometría ni imagen) se pintan en una capa
+aparte y no ocupan huecos de la celda. El compilador guarda el material en los 4 bits de
+material de la celda y la lista en el mundo; el generador de terreno pinta hierba, el suelo de
+las casas y caminos entre las puertas. En el visor, la tecla G (o `--materials`) tiñe el suelo
+según su material.
+
 **Mundo grande.** `tools/pieces/terrain.py` genera un terreno de alturas en las esquinas (tipo
 Populous: dos esquinas vecinas difieren como mucho en ¼ de planta) y lo convierte en piezas:
 cada casilla es una pieza entera o dos mitades partidas por una diagonal, y la superficie

@@ -23,7 +23,7 @@ from OpenGL.GL import (
     glClearColor, glClearDepth, glDeleteBuffers, glDeleteTextures, glDeleteVertexArrays,
     glDepthFunc, glEnable, glEnableVertexAttribArray, glGenBuffers,
     glGenTextures, glGenVertexArrays, glGetUniformLocation, glTexImage2D, glTexParameteri,
-    glUniform1f, glUniform1i, glUniform2f, glUniform3f, glUniformMatrix4fv, glUseProgram,
+    glUniform1f, glUniform1i, glUniform2f, glUniform3f, glUniform3fv, glUniformMatrix4fv, glUseProgram,
     glVertexAttribPointer, glViewport,
 )
 from OpenGL.GL import (
@@ -218,7 +218,7 @@ class ChunkMesh:
             glBindBuffer(GL_ARRAY_BUFFER, vbo)
             glBufferData(GL_ARRAY_BUFFER, verts.nbytes, verts, GL_STATIC_DRAW)
             stride = FLOATS_PER_VERTEX * 4
-            for loc, size, off in ((0, 2, 0), (1, 2, 2), (2, 3, 4), (3, 1, 7), (4, 1, 8)):
+            for loc, size, off in ((0, 2, 0), (1, 2, 2), (2, 3, 4), (3, 1, 7), (4, 1, 8), (5, 1, 9)):
                 glEnableVertexAttribArray(loc)
                 glVertexAttribPointer(loc, size, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(off * 4))
             idx = (np.arange(n, dtype=np.uint32)[:, None] * 4 + np.array([0, 1, 2, 0, 2, 3], np.uint32)).ravel()
@@ -266,6 +266,12 @@ class WorldRenderer:
         self.per_chunk_lights = True   # False: cada tile recorre todas las luces de la vista (depurar)
         self.use_material_maps = True  # False: sin leer albedo ni normales (diagnóstico, tecla M)
         self.use_mipmaps = True        # False: leer siempre el atlas completo (comparar)
+        self.material_tint = False     # True: teñir el suelo según su material (depurar, tecla G)
+        self.materials = None          # Materials del mundo (colores del tinte)
+        meta_materials = view.store.meta().get("materials") if hasattr(view, "store") else None
+        if meta_materials:
+            from engine.world.materials import Materials
+            self.materials = Materials.from_json(meta_materials)
 
         self.program = compileProgram(compileShader(TILE_VERTEX, GL_VERTEX_SHADER),
                                       compileShader(TILE_FRAGMENT, GL_FRAGMENT_SHADER))
@@ -273,7 +279,8 @@ class WorldRenderer:
             "u_projection", "u_color", "u_position", "u_pos_min", "u_pos_max", "u_scale",
             "u_closeness_range", "u_max_y", "u_show_depth", "u_level_bias", "u_cell_h",
             "u_height_tint", "u_cut_y", "u_cut_center", "u_cut_radius", "u_albedo", "u_normal",
-            "u_has_albedo", "u_has_normal", "u_cell_w", "u_lod", *LIGHT_UNIFORMS)}
+            "u_has_albedo", "u_has_normal", "u_cell_w", "u_lod", "u_material_tint",
+            "u_material_colors[0]", *LIGHT_UNIFORMS)}
 
     # --- Qué chunks se ven ---
 
@@ -338,6 +345,10 @@ class WorldRenderer:
         glUniform2f(self.u["u_cut_center"], *self.cut_center)
         glUniform1f(self.u["u_cut_radius"], self.cut_radius)
         glUniform1f(self.u["u_lod"], self.lod(camera))
+        tint = self.material_tint and self.materials is not None
+        glUniform1i(self.u["u_material_tint"], int(tint))
+        if tint:
+            glUniform3fv(self.u["u_material_colors[0]"], 16, self.materials.colors.astype(np.float32))
         glUniform1i(self.u["u_albedo"], 2)
         glUniform1i(self.u["u_normal"], 3)
         glUniform1f(self.u["u_cell_w"], g.cell_w)

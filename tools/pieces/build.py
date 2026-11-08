@@ -69,6 +69,8 @@ def build_tileset(out: Path, proj: Projection = DEFAULT_PROJECTION, pieces: List
         tileset.properties[key] = tm.Property(key, kind, value)
     for i, piece in enumerate(pieces):
         props = {"piece": piece.name, **piece.spec.to_properties()}
+        if piece.material:
+            props["material"] = piece.material
         tile = tm.Tile(id=i, type=piece.layer,
                        properties={k: tm.Property(k, "string", v) for k, v in props.items()})
         tileset.tiles[i] = tile
