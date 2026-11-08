@@ -1,372 +1,353 @@
-# TMX Explorer
+# PyTmxTest
 
-Visor OpenGL de mapas de [Tiled](https://www.mapeditor.org/) (TMX) con niveles de altura
-(pseudo-3D), personajes animados, NPCs con IA simple, colisiones y soporte de mando.
+Motor de juego 2D en Python con mundos en celdas de varias plantas, editados en
+[Tiled](https://www.mapeditor.org/) y compilados a un formato propio. Vista oblicua con
+profundidad exacta por píxel, iluminación dinámica, física de personajes, multitudes de NPC y
+navegación por caminos.
+
+- **Mundos de celdas 3D**: celdas de 2 × 2 × 3 m apiladas en plantas, con paredes, suelos
+  planos, rampas, pendientes suaves y techos bajos. Terrenos grandes tipo Populous (probado con
+  1 × 1 km).
+- **Compilador** de mapas de Tiled (`.tmx`) a un mundo compilado (`.cworld`, SQLite): chunks,
+  atlas de texturas, luces, lugares y grafo de navegación.
+- **Dibujo** con OpenGL 3.3: profundidad por píxel, iluminación por píxel con sol, ambiente y
+  luces puntuales, día y noche, ocultación de lo que hay encima del personaje.
+- **Personajes** como cilindros con física de andar, saltar y empujarse; tipos definidos en
+  datos; miles de NPC con niveles de detalle.
+- **Navegación**: grafo verificado contra la física, costes por material del suelo y por
+  pendiente, campos de flujo, lugares y rutinas (casa ↔ plaza).
+
+El documento de diseño completo, con las decisiones y su porqué, está en
+[Claude Docs](https://claude.ai/artifact/VaLKaPF4uJxTiFyzn9Amcd).
+
+---
 
 ## Instalación
 
-Necesitas Python 3.8+ y una GPU con OpenGL 3.3.
+Hace falta Python 3.9 o posterior y una GPU con OpenGL 3.3.
 
 ```bash
 pip install -r requirements.txt
-# o, como paquete editable con tests y zstd:
-pip install -e ".[dev,zstd]"
+# o, como paquete editable con las herramientas de desarrollo:
+pip install -e ".[dev]"
 ```
 
-## Uso
+Las únicas dependencias son **numpy, Pillow, PyOpenGL y glfw** (y nada más: el juego tiene que
+poder distribuirse). Opcionales: `PyOpenGL_accelerate` (más rápido) y `zstandard` (mapas TMX
+con compresión zstd).
+
+## Inicio rápido
 
 ```bash
-python -m tmx_explorer maps/map01/VTiles1.tmx              # con jugador
-python -m tmx_explorer maps/map01/VTiles1.tmx --npcs       # + NPCs de demo
-python -m tmx_explorer maps/map01/VTiles1.tmx assets/people/kid.png
-python -m tmx_explorer maps/map02/map02.tmx --no-player    # solo visor
-python run_explorer.py maps/map01/VTiles1.tmx              # atajo: jugador + NPCs
+python -m tools.pieces                                # genera el tileset de prueba y 4 mapas (≈ 6 s)
+python -m engine.compiler maps/terrain/terrain.tmx    # compila el terreno de 512 m (≈ 10 s)
+python -m engine.viewer maps/terrain/terrain.cworld --npcs 300
 ```
 
-| Control | Acción |
-|---|---|
-| WASD / flechas | Mover jugador (o cámara con `--no-player`) |
-| Shift + WASD | Mover cámara |
-| Q / E | Bajar / subir de nivel al jugador |
-| Arrastrar ratón, rueda, `+`/`-` | Pan y zoom |
-| Shift + `+`/`-` | Separación vertical entre niveles |
-| PgUp / PgDn | Nivel más alto que se dibuja |
-| 1 – 9 | Mostrar / ocultar la capa de Tiled número N |
-| G / I / P / C | Grid / info / profiling / debug de colisión |
-| Espacio | Reiniciar vista |
-| ESC | Salir |
-
-Mando: stick izquierdo o cruceta para mover, bumpers para la altura, Start para la info y
-Back para el grid.
-
-## Preparar mapas en Tiled
-
-El motor trabaja con un **mundo 3D de celdas**. Las capas de Tiled son solo la forma
-de editarlo: al cargar, todas las capas de una misma planta se integran en las celdas
-de esa planta. Cada celda tiene 4 huecos apilados de abajo arriba, en el orden de las
-capas en Tiled; los tiles vacíos no ocupan hueco.
-
-**Plantas.** Añade una propiedad `Z` de tipo int a la capa o, mejor, al grupo que
-contiene las capas de esa planta (las capas la heredan). Se admiten valores negativos
-(sótanos). Sin `Z`, la capa va a la planta 0.
-
-**Función de cada capa.** Ponla en la *clase* de la capa (campo Class de Tiled), o en
-una propiedad `role`. También se hereda del grupo.
-
-| Clase | Dibujo |
-|---|---|
-| `floor` | Plano, siempre por debajo de los personajes de su planta |
-| `object` | Ordenado por fila con los personajes (por defecto) |
-| `overhead` | Siempre por encima de los personajes (copas de árbol, arcos) |
-| `roof` | Como `overhead` (en el futuro se ocultará al entrar en un edificio) |
-
-Un tile puede imponer su función con su clase en el tileset: por ejemplo, una valla
-con clase `object` lo es aunque se pinte en una capa de suelo.
-
-**Colisión.** Propiedad bool `solid = true` en el tile, dentro del tileset.
-
-**Otros detalles:**
-
-- Las capas ocultas en Tiled no se cargan. La opacidad de capas y grupos se respeta.
-- La altura en píxeles de cada planta se puede fijar con una propiedad int
-  `level_height` en el mapa; si no, se usa 128.
-- Si una celda recibe más de 4 tiles, se conservan los de más abajo y se avisa con las
-  coordenadas.
-- Se admiten mapas infinitos.
-
-Ejemplo de organización:
-
-```
-ciudad.tmx                    (propiedad level_height = 92)
-├── grupo "Calle"             Z = 0
-│   ├── suelo                 class = floor
-│   ├── transiciones          class = floor      (tiles semitransparentes)
-│   ├── muros y vallas        class = object     (tiles con solid = true)
-│   └── copas                 class = overhead
-└── grupo "Casa, planta 1"    Z = 1
-    ├── suelo                 class = floor
-    └── muebles               class = object
-```
-
-## Estructura
-
-```
-tmx_manager.py              Lectura/escritura de TMX (independiente del visor)
-tmx_explorer/
-  __main__.py               CLI
-  app.py                    Ventana GLFW, entrada, bucle y dibujo de la escena
-  config.py                 Todas las constantes ajustables
-  demo.py                   Escena de ejemplo (jugador + NPCs)
-  camera.py                 Cámara 2D con zoom
-  gamepad.py                Mandos (layout estándar y joysticks genéricos)
-  map/
-    world.py                World: tiles[z, y, x, hueco], roles, celdas (integra las capas)
-    cells.py                Formato de celda de 16 bits (forma de colisión + flags)
-    collision.py            CollisionMap: consultas de colisión sobre las celdas
-    tileset_renderer.py     Tilesets -> atlas + tablas de consulta por GID
-    visible_tiles.py        Recolección vectorizada (numpy) de los tiles visibles
-  entities/
-    sprite.py               Spritesheets 4x4 animados (frames y atlas compartidos)
-    character.py            Movimiento con colisión, IA de NPC
-    manager.py              Creación y actualización de personajes
-  renderer/
-    opengl_renderer.py      Quads en mundo (cámara en la proyección) y pantalla; HUD
-    sprite_batch.py         quad_vertices (vectorizado, con flips) + dibujo por lotes
-    atlas.py                Empaquetado de imágenes en atlas con borde anti-bleeding
-    texture.py              Texturas OpenGL
-  shaders/sources.py        GLSL
-engine/                     Motor nuevo
-  world/                    Celda de 32 bits, CellSpec, chunks, WorldStore (SQLite), WorldView
-  compiler/                 Tiled (.tmx) -> mundo compilado (.cworld)
-  render/                   Dibujo del mundo y de los personajes (OpenGL 3.3, profundidad por píxel)
-  physics/                  Física de andar para cilindros, vectorizada, con contactos entre ellos
-  entities/                 Tipos de personaje, tabla con identificadores, comportamiento de paseo
-  viewer.py                 Visor: python -m engine.viewer MUNDO.cworld
-  png16.py                  PNG de 16 bits por canal (mapas de posición)
-tools/pieces/               Catálogo de piezas, .obj, render oblicuo, tileset y galería
-tests/                      Tests sin GPU (pytest); se ejecutan en GitHub Actions
-docs/                       architecture.md (diseño), tmx_manager.md (API del parser)
-maps/  assets/              Mapas y sprites de ejemplo
-```
-
-## Uso como librería
-
-```python
-from tmx_explorer.app import TMXExplorer
-
-explorer = TMXExplorer("maps/map01/VTiles1.tmx")
-player = explorer.add_character("assets/people/guy.png", x=1920, y=13800, is_player=True)
-explorer.entity_manager.create_npc_wanderer("assets/people/gal.png", x=2000, y=13900, radius=200)
-explorer.entity_manager.create_npc_patrol("assets/people/kid.png",
-                                          points=[(1800, 13700), (2100, 13700)])
-explorer.entity_manager.create_npc_follower("assets/people/fat.png", target=player)
-explorer.run()
-```
-
-`tmx_manager` se puede usar sin el visor:
-
-```python
-from tmx_manager import TiledMap
-
-m = TiledMap.load("maps/map01/VTiles1.tmx")
-m.layers[0].set_tile_gid(3, 4, 12)
-m.save("copia.tmx")                                   # conserva la codificación de cada capa
-m.save("copia.tmx", encoding="base64", compression="zlib")
-```
-
-Guardar no pierde nada: lo que `tmx_manager` no modela (capas de imagen, animaciones,
-formas de colisión de tiles, polígonos, textos, `nextobjectid`...) se conserva tal cual.
-
-## Motor nuevo: compilar mapas
-
-El paquete `engine` es el motor nuevo. Los mapas de Tiled se compilan una vez a un mundo
-de celdas de 32 bits (un archivo SQLite con chunks, paletas y el atlas), que el motor carga
-sin saber nada de Tiled:
+Andas con WASD, saltas con Espacio y te mueves por el mapa con el ratón; los NPC van de su casa
+a la plaza y vuelven, por los caminos. Prueba también:
 
 ```bash
-python -m engine.compiler maps/gallery/gallery.tmx          # -> maps/gallery/gallery.cworld
-python -m engine.world info  maps/gallery/gallery.cworld    # parámetros e informe de compilación
-python -m engine.world stats maps/gallery/gallery.cworld    # chunks, celdas, paletas
-python -m engine.world cell  maps/gallery/gallery.cworld 1 22 0   # qué hay en una celda
+python -m engine.compiler maps/levels/levels.tmx      # puente, edificio de dos plantas
+python -m engine.viewer maps/levels/levels.cworld --night --npcs 40
+
+python -m engine.compiler maps/course/course.tmx      # recorrido de prueba de la física
+python -m engine.viewer maps/course/course.cworld
+
+# Un kilómetro cuadrado con 3000 personajes:
+python -m tools.pieces --terrain-size 512 --terrain maps/terrain1k/terrain1k.tmx
+python -m engine.compiler maps/terrain1k/terrain1k.tmx
+python -m engine.viewer maps/terrain1k/terrain1k.cworld --npcs 3000
 ```
 
-El compilador avisa con coordenadas de los conflictos (dos suelos en la misma mitad, mezclar
-las diagonales `/` y `\`…) y de las rampas que sobresalen hacia una celda ocupada; con
-errores no escribe nada salvo con `--force`. En código:
+Los mapas compilados (`.cworld`) no se guardan en el repositorio: se generan con el
+compilador. Si cambias el formato de celda o las piezas, vuelve a generar y compilar.
 
-```python
-from engine.world.store import SQLiteWorldStore
-from engine.world.view import WorldView
+---
 
-world = WorldView(SQLiteWorldStore("maps/gallery/gallery.cworld"))
-world.cells(xs, ys, zs)      # valores de 32 bits de muchas celdas a la vez (arrays de numpy)
-world.visual(xs, ys, zs)     # sus 4 huecos visuales
+## El visor
+
+```
+python -m engine.viewer MUNDO.cworld [opciones]
 ```
 
-### Ver un mundo compilado y andar por él
-
-```bash
-python -m engine.compiler maps/course/course.tmx
-python -m engine.viewer maps/course/course.cworld          # con personaje
-python -m engine.viewer maps/course/course.cworld --no-player --no-vsync
-python -m engine.viewer maps/levels/levels.cworld --npcs 60 --night       # con gente paseando
-```
-
-| Control | Acción |
+| Tecla | Acción |
 |---|---|
-| WASD / flechas | Andar (sin personaje: mover la vista) |
+| WASD / flechas | Andar (con `--no-player`, mover la vista) |
 | Espacio | Saltar |
-| Arrastrar con el ratón | Mover la vista (deja de seguir al personaje; F vuelve a seguirlo) |
+| Arrastrar con el ratón | Mover la vista (deja de seguir al personaje) |
+| F | Volver a seguir al personaje |
 | Rueda, `+` / `-` | Zoom |
 | PgUp / PgDn | Planta más alta que se dibuja |
 | C | Cómo ocultar lo que hay encima del personaje: círculo, planta entera o nada |
 | L | Iluminación sí / no |
 | N | Día / noche |
 | K | Farol del personaje |
-| T | Tinte por altura (más claro cuanto más alto) |
-| P | Profundidad por píxel en escala de grises |
-| Inicio | Centrar el mapa |
+| T | Tinte por altura |
+| G | Tinte por material del suelo |
+| P | Ver la profundidad por píxel |
+| M | Sin mapas de albedo y normales (diagnóstico de rendimiento) |
+| Inicio | Centrar la vista |
 | ESC | Salir |
 
-**Dibujo.** Profundidad por píxel: la cercanía de cada píxel a la cámara se calcula con su
-altura (del mapa de posición del atlas, o de su posición dentro del sprite en los personajes)
-y su posición en pantalla, así que la oclusión es exacta sin reglas de orden. En superficies
-coincidentes gana la planta superior (0.1 px de cercanía por planta). La geometría de cada
-chunk se construye una vez al cargarlo.
-
-**Física de andar** (`engine/physics/walker.py`). Cilindros verticales con velocidad hacia una
-objetivo (agarre en el suelo y en el aire), gravedad y salto; paredes como segmentos (bordes,
-diagonales finas, lados de lo macizo) con deslizamiento en cualquier ángulo; escalón máximo,
-techos bajos y rampas. Para apoyarse cuenta el centro del cilindro; para chocar con suelos y
-techos, también su contorno. Paso fijo de 60 Hz, con las consultas al mundo agrupadas para
-todos los cilindros a la vez (≈ 0.45 ms por paso con uno, ≈ 2.3 ms con cien). Un test de estrés
-(200 personajes andando y saltando al azar) comprueba que nadie se mete en el suelo.
-
-**Iluminación.** Por píxel y en espacio lineal: ambiente de cielo y suelo según la normal, un
-sol y luces puntuales, sobre el albedo (color sin luz) y las normales del atlas. Las luces de
-la vista (hasta 1024) van en una textura, y cada chunk recorre solo las que lo alcanzan (si son
-más de 32, todas las de la vista): el coste por píxel no crece con las luces en pantalla; los personajes también se iluminan. Las luces se colocan en Tiled
-como objetos punto de clase `light` en una capa de objetos dentro de cada planta, con
-propiedades opcionales `color`, `radius` (m), `intensity` y `height` (m sobre el suelo de la
-planta); el compilador las guarda en la tabla `lights` del mundo. De día las luces puntuales
-se notan poco (25 %). Aún no hay sombras: la luz atraviesa las paredes.
-
-**Personajes** (`engine/entities`). Los tipos se definen en `assets/actors/types.json` (radio,
-altura, masa, velocidades, hoja de sprites, tinte; lo que falte se toma de `defecto`). Todos
-los personajes, jugador incluido, viven en una tabla de arrays con identificadores estables
-(fila + generación: un identificador de un personaje borrado nunca apunta a otro). Los
-cilindros que se solapan se apartan en proporción a la masa del otro, antes de resolver las
-paredes (las paredes siempre ganan). Los NPC pasean (`--npcs N`): alternan andar y pararse,
-miran delante para no caerse por un borde ni chocar con algo alto, y giran si se atascan.
-Todos se dibujan en dos llamadas (sombras y sprites). Coste por paso de 60 Hz, con física,
-contactos y comportamiento: ≈ 1.8 ms con 50 personajes, ≈ 3.4 ms con 150.
-
-**Materiales del suelo.** `assets/materials.json` lista los materiales ordenados de peor a
-mejor (barro, arena, roca, hierba, tierra, suelo, camino, adoquín), con su coste de andar y un
-color de depuración. Un tile declara su material con la propiedad `material`; si en una celda
-hay varios (por ejemplo, hierba y encima barro con transparencia), cuenta el peor. Los
-marcadores de material (piezas `material_*`, sin geometría ni imagen) se pintan en una capa
-aparte y no ocupan huecos de la celda. El compilador guarda el material en los 4 bits de
-material de la celda y la lista en el mundo; el generador de terreno pinta hierba, el suelo de
-las casas y caminos entre las puertas. En el visor, la tecla G (o `--materials`) tiñe el suelo
-según su material.
-
-**Grafo de navegación** (`engine/nav`). El compilador lo construye con la misma física que mueve
-a los personajes (`--no-nav` para omitirlo): un nodo por cada superficie en la que se puede
-estar de pie en el centro de una celda (varios por columna: la calle bajo el puente y el
-tablero, las dos plantas de una casa) y aristas a los 8 vecinos si el recorrido entre centros
-no sube ni baja más de un escalón por tramo de 25 cm, tiene altura libre y no cruza paredes ni
-macizos (las diagonales, sin cortar esquinas). Guarda la holgura de nodos y aristas, y cada
-clase de tamaño usa las aristas en las que cabe su radio (`NavGraph.usable(radio)`). Los tests
-recorren aristas al azar con la física: lo que el grafo dice que se puede, se puede, y lo que
-no, no. En el terreno de 512 m: 65 766 nodos y 520 024 aristas en ≈ 7 s.
-
-**Lugares, costes y rutinas.** Los lugares son rectángulos de clase `place` en las capas de
-objetos de Tiled (propiedad `kind`: casa, plaza…); el compilador los guarda y el generador de
-terreno crea uno por casa y una plaza empedrada. El coste de cada arista es distancia ×
-material (con los ajustes de cada tipo en `types.json`: al perro el camino le da igual) ×
-pendiente (subir cuesta mucho más que bajar). Un campo de flujo por destino y tipo da a cada
-nodo su coste restante y por dónde seguir; las distancias se calculan solo con numpy
-(delta-stepping vectorizado, mismo resultado que Dijkstra, ≈ 50 ms en el terreno de 512 m), y
-la caché los calcula repartidos entre frames con un presupuesto de tiempo. Sin scipy: el juego
-no depende de nada más que numpy, Pillow, PyOpenGL y glfw. Con `--npcs N` en un mundo con grafo y casas, cada NPC tiene su casa y va
-a la plaza y vuelve: con costes, el 78 % del recorrido es camino (sin costes, el 15 %). Lejos
-de la cámara siguen su rutina sin física: dos veces por segundo avanzan por su camino según el
-tiempo, apoyados en el suelo, y al volver cerca siguen con física (3000 NPC lejanos ≈ 7 ms por
-segundo de juego). Al entrar en un lugar, cada uno reserva un sitio libre dentro (el más lejano
-de la entrada, para que se llene desde el fondo) y espera allí: nadie se queda apiñado en la
-puerta. El generador traza los caminos con el mismo cálculo sobre la rejilla de
-celdas: evitan las pendientes, siguen las curvas de nivel y se unen en una red con ramales.
-
-**Mundo grande.** `tools/pieces/terrain.py` genera un terreno de alturas en las esquinas (tipo
-Populous: dos esquinas vecinas difieren como mucho en ¼ de planta) y lo convierte en piezas:
-cada casilla es una pieza entera o dos mitades partidas por una diagonal, y la superficie
-reproduce el terreno exactamente. Encima, casas de dos plantas en solares aplanados. Un
-kilómetro cuadrado se genera en ≈ 1.5 s y se compila en ≈ 10 s (4.5 MB). La simulación usa
-niveles de detalle alrededor del jugador (completa a menos de 60 m, a 30 Hz hasta 160 m,
-congelada más lejos) y el visor descarga los chunks lejanos: 3000 personajes repartidos por
-1 km² cuestan ≈ 4 ms por paso.
-
-```bash
-python -m tools.pieces --terrain-size 512 --terrain maps/terrain1k/terrain1k.tmx
-python -m engine.compiler maps/terrain1k/terrain1k.tmx
-python -m engine.viewer maps/terrain1k/terrain1k.cworld --npcs 3000
-```
-
-**Rendimiento del dibujo.** De lejos, el color, el albedo y las normales se leen de niveles
-reducidos del atlas (mipmaps, hasta 1/16, generados al cargar: media de los texels opacos que
-miran más hacia arriba, porque las caras verticales de un tile suelen quedar tapadas por el de
-delante y oscurecerían las aristas), con
-lecturas cercanas entre sí en lugar de saltar por todo el atlas; el mapa de posición se lee
-siempre completo, así que la profundidad y la silueta de cada píxel son exactas a cualquier
-zoom. Para eso el compilador deja un borde de 16 px alrededor de cada región del atlas (los
-mundos compilados antes, con borde de 1 px, se dibujan sin niveles reducidos). Las texturas del
-atlas se enlazan una vez por página y frame, y
-cada chunk visible cuesta dos llamadas directas a OpenGL; los personajes fuera de la vista no se
-dibujan. PyOpenGL no comprueba errores tras cada llamada (es caro); para depurar, ejecuta con
-`ENGINE_GL_DEBUG=1`. La tecla M deja de leer los mapas de albedo y normales (con la
-iluminación encendida), para separar el coste de leer el atlas del de las luces. La barra de título muestra el tiempo de GPU de cada tramo (mundo, sombras y
-personajes, medido con consultas de OpenGL sin parar el dibujo) y el de CPU de preparar el frame.
-Si un frame tarda mucho, la simulación da como mucho 4 pasos por frame: el
-juego va más lento un momento en lugar de hundirse.
-
-**Ocultar lo que hay encima.** Cuando el personaje tiene algo por encima de su planta en su
-celda o en las de alrededor (un forjado, un puente), se deja de dibujar lo que está por encima
-de su planta: en un círculo a su alrededor o en todo el mapa (tecla C). La detección es
-automática; no hay que marcar nada en Tiled.
-
-Opciones útiles: `--spawn X Y` (celda de aparición) y `--spawn-level N` (su planta),
-`--cut círculo|planta|no`, `--night`, `--no-lighting`, `--tint`, `--screenshot captura.png`
-(dibujar, guardar y salir) y, con ella, `--walk DX DZ SEGUNDOS` para andar antes de capturar.
-
-## Piezas de prueba (formato de celda de 32 bits)
-
-`tools/pieces` genera, a partir de un catálogo de 218 piezas, todo lo necesario para
-probar el formato de celda nuevo (paredes, rellenos, suelos, rampas y techos bajos):
-
-```bash
-python -m tools.pieces          # ~2 s
-```
-
-| Salida | Contenido |
+| Opción | |
 |---|---|
-| `assets/pieces/obj/*.obj`, `pieces.mtl` | Una malla mínima por pieza (metros; X este, Y arriba, Z sur) |
-| `assets/pieces/pieces.png` | Atlas de color, renderizado desde los `.obj` en la proyección oblicua |
-| `assets/pieces/pieces.n.png` | Normales por píxel, misma disposición |
-| `assets/pieces/pieces.p.png` | Posición 3D por píxel (RGBA de 16 bits), misma disposición |
-| `assets/pieces/pieces.a.png` | Albedo: el color del material sin luz, para la iluminación, misma disposición |
-| `assets/pieces/pieces.tsx` | Tileset de Tiled: cada tile lleva su clase y su parte de celda como propiedades |
-| `maps/gallery/gallery.tmx` | Galería con cada pieza en su celda y su nombre debajo |
-| `maps/course/course.tmx` | Recorrido en tres plantas: plataforma con escalera, habitación, muro diagonal, túnel, terraza con rampa ancha y torre |
-| `maps/levels/levels.tmx` | Dos niveles con aire debajo: puente, edificio de dos plantas con escalera interior y agujero, balcón |
-| `maps/terrain/terrain.tmx` | Terreno tipo Populous de 512 × 512 m con casas de dos plantas y farolas (`--terrain-size 512` para 1 km) |
+| `--npcs N` | N personajes. Si el mundo tiene grafo de navegación y casas, siguen la rutina casa ↔ plaza; si no, pasean |
+| `--spawn X Y`, `--spawn-level N` | Celda y planta donde aparece el jugador |
+| `--no-player` | Sin jugador: WASD mueve la vista |
+| `--zoom Z`, `--center X Y` | Zoom y celda en el centro |
+| `--night`, `--no-lighting` | Empezar de noche, o sin iluminación |
+| `--tint`, `--materials`, `--depth` | Empezar con el tinte por altura, por material, o viendo la profundidad |
+| `--cut círculo\|planta\|no` | Cómo ocultar lo que hay encima del personaje |
+| `--seed N` | Semilla de la aparición y del comportamiento de los NPC |
+| `--no-vsync` | Sin sincronía vertical (para medir los fps reales) |
+| `--size W H` | Tamaño de la ventana |
+| `--screenshot F.png` | Dibujar, guardar una captura y salir (con `--walk DX DZ S` o `--simulate S` antes) |
 
-Proyección (como los mapas existentes): celdas de 2 × 2 × 3 m, tiles de 128 px de ancho,
-filas de 92 px y 133 px por planta. Las propiedades de cada tile (`walls`, `fill`, `floor`,
-`floor_part`, `ceiling`, `ceiling_part`, `flags`) se leen con
-`engine.world.CellSpec.from_properties`, y el formato de 32 bits está en
-`engine/world/cell.py`.
+La barra de título muestra la versión, los fps, los personajes por zona de detalle
+(cerca/medio/lejos), el estado de las rutinas, y los tiempos: simulación, **GPU** por tramo
+(mundo, sombras, personajes; medido con consultas de OpenGL) y **CPU** de preparar el dibujo.
+
+---
+
+## Hacer mapas en Tiled
+
+Lo más fácil es partir de lo que genera `python -m tools.pieces`: el tileset
+`assets/pieces/pieces.tsx` (226 piezas con todas sus propiedades) y los mapas de
+`maps/gallery`, `maps/course`, `maps/levels` y `maps/terrain`. La galería muestra cada pieza
+con su nombre.
+
+### El mundo: celdas en plantas
+
+El mundo es una rejilla de celdas de **2 × 2 m** en planta y **3 m** de alto. Cada **planta**
+del mapa es un **grupo de capas** de Tiled con una propiedad entera `Z` (0, 1, 2…; negativa para
+sótanos). Todas las capas de tiles de un grupo se combinan en las celdas de esa planta: da igual
+en qué capa pongas cada pieza, salvo por el orden de dibujo.
+
+```
+pueblo.tmx                      propiedad level_height = 133
+├── grupo "Planta 0"            Z = 0
+│   ├── suelo                   (tiles de suelo, rampas, terreno)
+│   ├── piezas                  (paredes, bloques macizos)
+│   ├── materiales              (marcadores de material, invisibles)
+│   ├── luces                   (capa de objetos: luces)
+│   └── lugares                 (capa de objetos: lugares)
+└── grupo "Planta 1"            Z = 1
+    └── …
+```
+
+Si una celda recibe más de 4 tiles visibles, el compilador avisa. Los tiles se pueden voltear
+en horizontal (el compilador refleja su geometría).
+
+### Propiedades del tileset
+
+| Propiedad | Ejemplo | |
+|---|---|---|
+| `cell_width_m`, `cell_height_m` | 2, 3 | Tamaño de la celda en metros |
+| `row_height_px`, `level_height_px` | 92, 133 | Píxeles por fila de celdas y por planta |
+| `normal_map`, `position_map`, `albedo_map` | `pieces.n.png`… | Mapas que acompañan a la imagen del tileset, con la misma disposición: normales, posición en la celda (PNG de 16 bits, para la profundidad por píxel) y color sin sombrear |
+| `position_range_m` | `x 0 2; y 0 3.75; z 0 2` | Rango del mapa de posición |
+
+### Propiedades de cada tile: su parte de la celda
+
+Cada tile declara qué pone en su celda. El compilador combina los tiles de cada celda y avisa
+de los conflictos (por ejemplo, dos suelos distintos en la misma mitad).
+
+| Propiedad | Valores |
+|---|---|
+| `walls` | Bordes con pared, como letras: `N`, `S`, `E`, `W` (por ejemplo `NW`) |
+| `fill` | `solid`, medias celdas macizas `half_nw`, `half_ne`, `half_se`, `half_sw`, paredes diagonales finas `thin_slash`, `thin_backslash` |
+| `floor` | `flat 0` … `flat 0.75`; rampas rectas (escaleras, 37°) `ramp N 0`, `ramp N 0.5`…; rampas diagonales `ramp NE 0` … `ramp NW 0.75`; pendientes suaves (21°) `slope N 0` … `slope W 0.75`. El número es la altura de partida en fracciones de planta |
+| `floor_part` | `all` (por defecto) o una mitad de la celda partida por una diagonal: `nw`, `se`, `ne`, `sw` |
+| `ceiling`, `ceiling_part` | Techo bajo a `0.75`, `0.5` o `0.25` de la planta, en toda la celda o en una mitad |
+| `flags` | `ladder` (escalera de mano), `active` (celda con suceso) |
+| `material` | Material del suelo (ver abajo) |
+
+### Materiales del suelo
+
+`assets/materials.json` lista los materiales **ordenados de peor a mejor** (barro, arena, roca,
+hierba, tierra, suelo, camino, adoquín), con su coste de andar y un color para depurar. Un tile
+declara el suyo con la propiedad `material`. Si en una celda hay varios (hierba y, encima, barro
+con transparencia para la transición), **cuenta el peor**. Los tiles sin material (una flor,
+una piedra decorativa) no cuentan.
+
+Para pintar material sin cambiar el aspecto hay **marcadores**: piezas `material_*` invisibles
+que se pintan en una capa aparte; no ocupan huecos de la celda ni sitio en el atlas. La tecla G
+del visor tiñe el suelo según su material.
+
+### Luces
+
+Objetos punto de clase `light` en una capa de objetos dentro del grupo de su planta, con
+propiedades opcionales `color` (por ejemplo `#ffd9a0`), `radius` (m), `intensity` y `height`
+(m sobre el suelo de la planta). De día las luces puntuales se notan poco; de noche, del todo.
+
+### Lugares
+
+Rectángulos de clase `place` en una capa de objetos, con su nombre y una propiedad `kind`
+(`casa`, `plaza`, `taberna`…). Son los destinos de la navegación: las rutinas de los NPC
+usan las casas y la plaza.
+
+---
+
+## Compilar
+
+```
+python -m engine.compiler MAPA.tmx [-o SALIDA.cworld] [--chunk-size 32] [--force] [--no-nav]
+```
+
+El compilador lee el mapa y sus tilesets, combina los tiles de cada celda, comprueba la
+geometría y escribe el mundo compilado. Los **errores** (un material desconocido, piezas
+incompatibles en una celda) impiden escribirlo salvo con `--force`; los **avisos** (más de 4
+tiles en una celda, un suelo que sobresale de su celda con la celda de arriba ocupada) indican
+la posición. Al terminar muestra un resumen: celdas, chunks, regiones del atlas, luces,
+lugares, nodos y aristas de navegación, tiempos y tamaño.
+
+El `.cworld` es una base de datos SQLite con:
+
+- **Chunks** de 32 × 32 columnas (configurable). Cada columna guarda solo las plantas que
+  ocupa; por encima hay aire y por debajo, macizo.
+- **Atlas** de texturas: color, posición, normales y albedo, con un borde de 16 px por región
+  para los niveles reducidos (mipmaps) que se usan de lejos.
+- **Luces, lugares y materiales.**
+- **Grafo de navegación** (salvo con `--no-nav`): superficies transitables, sus vecinos, su
+  holgura y su material. Se calcula con la misma física que mueve a los personajes, así que lo
+  que el grafo dice que se puede andar, se puede.
+
+---
+
+## Personajes y NPC
+
+Los tipos de personaje están en `assets/actors/types.json` (persona, niño, perro, guardia):
+radio y altura del cilindro, escalón máximo, masa, velocidades, hoja de sprites, tinte y, para
+la navegación, ajustes de los costes por material (`material_costs`) y de la pendiente
+(`uphill`, `downhill`). Lo que un tipo no indica se toma de `defecto`.
+
+La simulación tiene **niveles de detalle** alrededor del jugador: a menos de 60 m, física y
+comportamiento completos a 60 Hz; hasta 160 m, física a 30 Hz; más lejos, sin física (los NPC
+con rutina siguen avanzando por su camino según el tiempo). Si un frame tarda mucho, la física
+da como mucho 4 pasos por frame.
+
+## Usar el motor desde código
+
+```python
+import numpy as np
+from engine.world.store import SQLiteWorldStore
+from engine.world.view import WorldView
+from engine.entities import ActorTable, load_types, BRAIN_WANDER
+from engine.entities.world_sim import ActorSim
+
+world = WorldView(SQLiteWorldStore("maps/levels/levels.cworld"))
+actors = ActorTable(load_types())
+sim = ActorSim(world, actors)
+
+for p in sim.spawn_points(20, np.random.default_rng(1)):
+    actors.spawn("persona", p, brain=BRAIN_WANDER)          # NPC que pasean
+hero = actors.get(actors.spawn("persona", [12.0, 0.0, 9.0], brain=0))
+
+hero.wish = (1.0, 0.0)          # andar hacia el este (X), a toda velocidad
+sim.step(2.0)                   # 2 s de simulación a paso fijo (60 Hz)
+print(hero.pos, hero.grounded)
+print(world.cells(6, 4, 0))     # valor de 32 bits de la celda (6, 4) de la planta 0
+```
+
+Coordenadas: X hacia el este, Z hacia el sur, Y hacia arriba, en metros. La celda (x, y) de la
+planta z ocupa [2x, 2x+2) × [2y, 2y+2) en planta y [3z, 3z+3) en altura.
+
+Para la navegación: `engine.nav.NavGraph` (el grafo del mundo), `load_places`, `CostProfile`,
+`FieldCache` (campos de flujo hacia un lugar) y `engine.entities.RoutineBrains` (rutinas).
+
+---
+
+## Herramientas de prueba: `tools.pieces`
+
+```
+python -m tools.pieces [--terrain-size 256] [--houses N] [--seed N] [--terrain RUTA.tmx]
+```
+
+Genera el catálogo de piezas de prueba (geometría `.obj` y su render oblicuo: color, normales,
+posición y albedo), el tileset `assets/pieces/pieces.tsx` y cuatro mapas:
+
+| Mapa | |
+|---|---|
+| `maps/gallery` | Todas las piezas, con su nombre |
+| `maps/course` | Recorrido para la física: escaleras, habitación, muro diagonal, túnel, rampas, torre |
+| `maps/levels` | Dos plantas: puente sobre una calle, edificio con escalera interior y agujero, balcón |
+| `maps/terrain` | Terreno tipo Populous con casas de dos plantas, caminos que siguen el terreno, plaza y farolas (256 × 256 celdas = 512 m; `--terrain-size 512` para 1 km) |
+
+## Estructura del proyecto
+
+```
+engine/                     El motor
+  world/                    Celda de 32 bits, CellSpec, materiales, chunks, almacén SQLite, vista del mundo
+  compiler/                 Tiled (.tmx) -> mundo compilado (.cworld)
+  render/                   Dibujo del mundo y de los personajes (OpenGL 3.3), medidas de GPU
+  physics/                  Física de andar para cilindros, vectorizada, con contactos entre ellos
+  entities/                 Tipos de personaje, tabla de personajes, paseo, rutinas, simulación por zonas
+  nav/                      Grafo de navegación, costes, caminos mínimos, campos de flujo, lugares
+  viewer.py                 Visor: python -m engine.viewer
+tools/pieces/               Catálogo de piezas, render oblicuo, tileset y mapas de prueba (terreno incluido)
+assets/                     Tileset de prueba, sprites, types.json, materials.json
+maps/                       Mapas de ejemplo (los .cworld se generan)
+tests/                      Tests (pytest)
+docs/                       Documentación antigua del explorador y de tmx_manager
+tmx_manager.py              Lectura y escritura de TMX, independiente del motor
+tmx_explorer/               Explorador antiguo de mapas TMX (ver abajo)
+```
 
 ## Tests
 
 ```bash
-python -m pytest
+python -m pytest -q                              # sin pantalla, los tests de GPU se saltan
+xvfb-run -a python -m pytest -q                  # con pantalla virtual: todos
 ```
 
-## Rendimiento
+Los tests de dibujo comparan la GPU píxel a píxel con una referencia en CPU; los de física y
+navegación hacen andar a personajes de verdad (por ejemplo, recorren aristas al azar del grafo
+para comprobar que coincide con la física). Para depurar llamadas a OpenGL, ejecuta con
+`ENGINE_GL_DEBUG=1` (por defecto PyOpenGL no comprueba errores, porque es caro).
 
-Todos los tiles van en un atlas compartido y la recolección de tiles visibles es
-vectorizada, así que el mapa se dibuja con una sola draw call (una por página del
-atlas) y cada spritesheet de personaje con otra. El HUD (`I`) muestra las draw calls.
+## Rendimiento (orientativo)
+
+- Terreno de 1 km² con 90 casas: se genera en ≈ 25 s (casi todo es trazar la red de caminos),
+  se compila en ≈ 40 s (más de la mitad, el grafo de navegación) y ocupa unos 5 MB; cargarlo
+  entero son 0.3 s. El de 512 m: ≈ 6 s y ≈ 9 s.
+- 3000 personajes repartidos por 1 km²: ≈ 4 ms por paso de simulación con niveles de detalle.
+- Dibujo: a zoom normal, unos 12 ms de GPU para el mundo a 2560 × 1400; a zoom muy lejano
+  (todo el mapa), unos 15 ms.
+- Un campo de flujo en el terreno de 512 m: ≈ 50 ms, calculado repartido entre frames.
 
 ## Limitaciones conocidas
 
-- De las formas de colisión de `cells.py` solo están implementadas vacío y bloque; el
-  resto tiene el formato reservado y, de momento, cuenta como bloque.
-- Los tejados (`roof`) aún no se ocultan al entrar en un edificio.
-- Los personajes se dibujan después de los tiles: el borde semitransparente de un
-  objeto que esté delante de un personaje se mezcla con lo que hay detrás del objeto,
-  no con el personaje.
-- No se soportan orientaciones distintas de ortogonal; el flag de rotación hexagonal
-  se ignora.
-- Los tiles animados de Tiled se conservan al guardar, pero se muestran estáticos.
+- La luz atraviesa las paredes (no hay sombras de las luces puntuales).
+- Los personajes no se esquivan con antelación: se apartan al chocar.
+- Aún no hay sucesos (celdas activas, zonas), puertas que se abran ni objetos.
+- A zoom muy lejano, cada chunk se dibuja con todo su detalle; falta un dibujo simplificado.
+
+---
+
+## Herramientas antiguas
+
+Antes del motor, el proyecto era un visor de mapas TMX. Sigue funcionando y es útil para ver
+mapas de Tiled cualquiera (sin compilar):
+
+```bash
+python -m tmx_explorer maps/map01/VTiles1.tmx              # con jugador
+python -m tmx_explorer maps/map01/VTiles1.tmx --npcs       # y NPC de demostración
+python -m tmx_explorer maps/map02/map02.tmx --no-player    # solo visor
+```
+
+Usa capas con clase `floor`, `object`, `overhead` o `roof`, la propiedad `Z` para las plantas y
+`solid = true` en los tiles para la colisión; su documentación está en `docs/architecture.md`.
+
+`tmx_manager` lee y escribe TMX sin perder nada de lo que no modela (capas de imagen,
+animaciones, polígonos, textos…), y se puede usar por separado:
+
+```python
+from tmx_manager import TiledMap
+
+m = TiledMap.load("maps/map01/VTiles1.tmx")
+m.layers[0].set_tile_gid(3, 4, 12)
+m.save("copia.tmx", encoding="base64", compression="zlib")
+```
+
+Su API está en `docs/tmx_manager.md`.
