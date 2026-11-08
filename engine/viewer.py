@@ -6,8 +6,8 @@
 
 Controles: WASD/flechas: andar (sin personaje, mover la vista) · Espacio: saltar ·
 arrastrar con el ratón: mover la vista (deja de seguir al personaje; F vuelve a seguirlo) ·
-rueda o +/-: zoom · PgUp/PgDn: planta más alta que se dibuja · C: cómo ocultar lo que hay
-encima del personaje (círculo, planta entera o nada) · L: iluminación sí/no · N: día/noche ·
+rueda o +/-: zoom · PgUp/PgDn: planta más alta que se dibuja · C: cómo ocultar lo que tapa al
+personaje (fachada, círculo, planta entera o nada) · L: iluminación sí/no · N: día/noche ·
 K: farol · T: tinte por altura · G: tinte por material del suelo · P: profundidad por píxel ·
 M: sin mapas de albedo y normales
 (diagnóstico de rendimiento) · Inicio: centrar · ESC: salir.
@@ -31,6 +31,7 @@ from engine.render.sprites import (
     ROWS_4, WALK_FPS, SpriteRenderer, SpriteSheet, delete_sheet, facing_index, facing_indices,
 )
 from engine.render.world_renderer import Camera, Lighting, WorldRenderer
+from engine.world import cell as C
 from engine.world.store import SQLiteWorldStore
 from engine.world.view import WorldView
 
@@ -38,7 +39,12 @@ PAN_SPEED = 900.0            # px de pantalla por segundo
 KEY_ZOOM = 1.25
 FOLLOW_RATE = 8.0            # 1/s: lo deprisa que la cámara alcanza al personaje
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
-CUT_MODES = ("círculo", "planta", "no")         # cómo se oculta lo que hay encima del personaje
+CUT_MODES = ("fachada", "círculo", "planta", "no")   # cómo se oculta lo que tapa al personaje
+FACADE_KEEP = 0.5            # m: zócalo que se conserva de lo que hay delante (paredes de su planta)
+MASK_HALF = 24               # la máscara de corte cubre 48 × 48 celdas alrededor del personaje
+MAX_ROOM_CELLS = 1200        # una "habitación" más grande que esto se corta ahí
+STEP_UP = 1.6                # m: una celda sin techo junto a la habitación cuenta si su suelo está a
+                             # menos de esto de los pies (un hueco de escalera)
 CUT_RADIUS_CELLS = 2.5
 LANTERN = {"color": (1.0, 0.62, 0.30), "radius": 5.0, "intensity": 1.3, "height": 1.5}
 NPC_MIX = {"persona": 0.55, "niño": 0.15, "perro": 0.2, "guardia": 0.1}
@@ -94,6 +100,7 @@ class Viewer:
         self.lantern = True
         self.sim_ms = 0.0
         self._evict_timer = 0.0
+        self._facade_key, self._facade = None, None
         self.drawn_actors = 0
         if self.player is not None:
             self._center_on_player(1.0)
@@ -327,15 +334,148 @@ class Viewer:
         roof = (starts <= level) & (floor > Y - 1.0) & (ceiling - floor >= 1.0) & (ceiling <= floor + 2 * g.cell_h)
         return bool(roof[0] or roof[1:].sum() >= 2)
 
+    def roofed_cells(self, xs, ys, feet: float, below: float = 1.0, heights: bool = False):
+        """Celdas con techo encima a la altura del personaje. En cuatro puntos de cada celda,
+        lejos de las diagonales (una casilla partida tiene en la diagonal un borde de macizo que la
+        búsqueda de suelo no ve, y parecería un techo con aire debajo): suelo de verdad cerca de
+        sus pies (no enterrado bajo la columna ni dentro de un macizo) y, encima, algo a menos de
+        dos plantas con al menos 1 m de hueco. Con techo, si lo tienen al menos 3 de los 4."""
+        g, v, phys = self.renderer.geo, self.view, self.sim.physics
+        cxs, cys = xs.ravel(), ys.ravel()
+        starts = np.array([v.column(int(x), int(y))[0] for x, y in zip(cxs, cys)])
+        votes = np.zeros(cxs.size, int)
+        floors = np.zeros(cxs.size)
+        for u, w in ((0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)):
+            px, pz = (cxs + u) * g.cell_w, (cys + w) * g.cell_w
+            floor = phys.support(px, pz, np.full(px.size, feet + 0.5))
+            level = np.floor((floor + 0.05) / g.cell_h).astype(int)
+            here = v.cells(cxs, cys, np.floor((floor + 0.1) / g.cell_h).astype(int))
+            buried = C.fill_contains(C.fill(here), u, w)
+            ceiling = phys.ceiling(px, pz, floor)
+            ok = ((starts <= level) & ~buried & (floor > feet - below) & (floor < feet + 1.0)
+                  & (ceiling - floor >= 1.0) & (ceiling <= floor + 2 * g.cell_h))
+            votes += ok
+            floors = np.maximum(floors, np.where(ok, floor, -1e9))
+        roofed = (votes >= 3).reshape(xs.shape)
+        return (roofed, floors.reshape(xs.shape)) if heights else roofed
+
+    @staticmethod
+    def fill_holes(region: np.ndarray) -> np.ndarray:
+        """Añade las celdas que quedan dentro de la región, entre celdas suyas en su fila y en su
+        columna (un hueco de escalera, sin techo encima, también es del edificio)."""
+        def spans(a):
+            out = np.zeros_like(a)
+            for i, row in enumerate(a):
+                idx = np.nonzero(row)[0]
+                if idx.size:
+                    out[i, idx[0]:idx[-1] + 1] = True
+            return out
+        return region | (spans(region) & spans(region.T).T)
+
+    def room(self, cx: int, cy: int, level: int, feet: float, half: int = MASK_HALF):
+        """Habitación del personaje: celdas con techo unidas a la suya sin cruzar paredes (ni
+        macizos). Devuelve (x0, y0, máscara booleana de (2·half) × (2·half)), vacía al aire libre."""
+        v = self.view
+        n = 2 * half
+        x0, y0 = cx - half, cy - half
+        ys, xs = np.mgrid[y0:y0 + n, x0:x0 + n]
+        inside = np.zeros((n, n), bool)
+        roofed = self.roofed_cells(xs, ys, feet)
+        if not roofed[half, half]:
+            return x0, y0, inside
+        g, phys = self.renderer.geo, self.sim.physics
+        floor_h = phys.support((xs.ravel() + 0.5) * g.cell_w, (ys.ravel() + 0.5) * g.cell_w,
+                               np.full(xs.size, feet + 1.6)).reshape(xs.shape)
+        cells = v.cells(xs, ys, level)
+        wall_n, wall_w = C.wall_n(cells) != 0, C.wall_w(cells) != 0
+        solid = C.fill(cells) == C.FILLS.index("solid")
+        todo = [(half, half)]
+        inside[half, half] = True
+        while todo and inside.sum() < MAX_ROOM_CELLS:
+            j, i = todo.pop()
+            for dj, di, blocked in ((-1, 0, wall_n[j, i]), (0, -1, wall_w[j, i]),
+                                    (1, 0, wall_n[j + 1, i] if j + 1 < n else True),
+                                    (0, 1, wall_w[j, i + 1] if i + 1 < n else True)):
+                a, b = j + dj, i + di
+                if blocked or not (0 <= a < n and 0 <= b < n) or inside[a, b] or solid[a, b] or not roofed[a, b]:
+                    continue
+                inside[a, b] = True
+                todo.append((a, b))
+        # Un paso más sin cruzar paredes, por celdas sin techo pero no macizas (un hueco de
+        # escalera dentro de la habitación); y los huecos que queden dentro
+        grown = inside.copy()
+        js, is_ = np.nonzero(inside)
+        for j, i in zip(js, is_):
+            for dj, di, blocked in ((-1, 0, wall_n[j, i]), (0, -1, wall_w[j, i]),
+                                    (1, 0, wall_n[j + 1, i] if j + 1 < n else True),
+                                    (0, 1, wall_w[j, i + 1] if i + 1 < n else True)):
+                a, b = j + dj, i + di
+                if not blocked and 0 <= a < n and 0 <= b < n and not solid[a, b] and not roofed[a, b] \
+                        and abs(floor_h[a, b] - feet) < STEP_UP:
+                    grown[a, b] = True
+        return x0, y0, self.fill_holes(grown)
+
+    def facade_cut_mask(self, cx: int, cy: int, level: int, feet: float):
+        """Máscara de corte, o None si no hay nada que ocultar: dict(origin, mask, base, floor,
+        feet). Solo en un interior (algo sólido por encima del personaje): al aire libre nunca se
+        oculta nada, aunque esté detrás de un edificio.
+
+        En su habitación (celdas con techo unidas a la suya sin cruzar paredes, con los huecos de
+        escalera) se oculta todo lo de encima de su planta, salvo la pared del fondo, que se
+        conserva hacia arriba; en la fila de delante, la pared de delante queda en zócalo.
+        ``mask`` (alto, ancho, 4): canales = plantas base .. base + 3; 0 se dibuja, 128 zócalo (más
+        de FACADE_KEEP sobre ``feet``), 255 se oculta. El shader mira cada píxel 25 cm al sur en la
+        planta ``floor`` y 25 cm al norte en las de encima."""
+        x0, y0, inside = self.room(cx, cy, level, feet)
+        if not inside.any():
+            return None
+        n = inside.shape[0]
+        mask = np.zeros((n, n, 4), np.uint8)
+        mask[inside, 1:] = 255
+        front = np.zeros_like(inside)
+        front[1:] = inside[:-1] & ~inside[1:]
+        mask[front, 0] = 128
+        return {"origin": (x0, y0), "mask": mask, "base": level, "floor": level, "feet": feet}
+
     def update_cut(self):
-        """Ocultar lo que hay encima del personaje según el modo (tecla C)."""
+        """Ocultar lo que tapa al personaje según el modo (tecla C).
+
+        - fachada (casa de muñecas): solo en un interior (algo sólido por encima), el techo y las
+          plantas de arriba de su habitación y la pared de delante (en zócalo); las paredes del
+          fondo y de los lados se quedan. Al aire libre, nada. Ver facade_cut_mask.
+        - círculo / planta: lo que hay por encima de su planta, en un círculo o en todo el mapa;
+          solo bajo techo."""
         r = self.renderer
         mode = CUT_MODES[self.cut_mode]
-        if self.player is None or mode == "no" or not self.covered():
+        r.facade = None
+        if mode != "fachada":
+            self._facade_key = None
+        if self.player is None or mode == "no":
             r.cut_level = None
             return
         g = r.geo
-        r.cut_level = int(np.floor((self.player.pos[1] + 0.05) / g.cell_h))
+        X, Y, Z = self.player.pos
+        if mode == "fachada":
+            level = int(np.floor((Y + 0.05) / g.cell_h))
+            key = (int(np.floor(X / g.cell_w)), int(np.floor(Z / g.cell_w)), level)
+            if key != self._facade_key:                 # solo al cambiar de celda o de planta
+                self._facade_key = key
+                self._facade = self.facade_cut_mask(*key, feet=float(Y))
+                f = self._facade
+                if f is not None:
+                    r.set_cut_mask(f["mask"], f["origin"], f["base"], f["feet"], FACADE_KEEP, f["floor"])
+            if self._facade is None:
+                r.cut_level = None
+                return
+            r.facade = r.facade_state
+            if self._facade["floor"] == level:             # su propio suelo: sigue a sus pies
+                r.facade["feet"] = float(Y)
+            r.cut_level = level
+            return
+        if not self.covered():
+            r.cut_level = None
+            return
+        r.cut_level = int(np.floor((Y + 0.05) / g.cell_h))
         r.cut_center = self._player_screen()
         r.cut_radius = CUT_RADIUS_CELLS * g.tile_w if mode == "círculo" else -1.0
 
@@ -472,7 +612,7 @@ def main(argv=None) -> int:
     parser.add_argument("--tint", action="store_true", help="empezar con el tinte por altura")
     parser.add_argument("--materials", action="store_true", help="empezar con el tinte por material")
     parser.add_argument("--cut", choices=CUT_MODES, default=CUT_MODES[0],
-                        help="cómo ocultar lo que hay encima del personaje")
+                        help="cómo ocultar lo que tapa al personaje")
     parser.add_argument("--night", action="store_true", help="empezar de noche")
     parser.add_argument("--no-lighting", action="store_true", help="sin iluminación (colores del tileset)")
     parser.add_argument("--walk", type=float, nargs=3, action="append", metavar=("DX", "DZ", "S"),

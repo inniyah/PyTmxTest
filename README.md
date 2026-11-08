@@ -79,7 +79,7 @@ python -m engine.viewer MUNDO.cworld [opciones]
 | F | Volver a seguir al personaje |
 | Rueda, `+` / `-` | Zoom |
 | PgUp / PgDn | Planta más alta que se dibuja |
-| C | Cómo ocultar lo que hay encima del personaje: círculo, planta entera o nada |
+| C | Cómo ocultar lo que tapa al personaje: fachada, círculo, planta entera o nada |
 | L | Iluminación sí / no |
 | N | Día / noche |
 | K | Farol del personaje |
@@ -98,11 +98,19 @@ python -m engine.viewer MUNDO.cworld [opciones]
 | `--zoom Z`, `--center X Y` | Zoom y celda en el centro |
 | `--night`, `--no-lighting` | Empezar de noche, o sin iluminación |
 | `--tint`, `--materials`, `--depth` | Empezar con el tinte por altura, por material, o viendo la profundidad |
-| `--cut círculo\|planta\|no` | Cómo ocultar lo que hay encima del personaje |
+| `--cut fachada\|círculo\|planta\|no` | Cómo ocultar lo que tapa al personaje (por defecto, fachada) |
 | `--seed N` | Semilla de la aparición y del comportamiento de los NPC |
 | `--no-vsync` | Sin sincronía vertical (para medir los fps reales) |
 | `--size W H` | Tamaño de la ventana |
 | `--screenshot F.png` | Dibujar, guardar una captura y salir (con `--walk DX DZ S` o `--simulate S` antes) |
+
+**Ocultar lo que tapa al personaje.** Solo en interiores (con algo sólido por encima del
+personaje); al aire libre nunca se oculta nada, aunque esté detrás de un edificio. Por defecto,
+como una casa de muñecas (modo *fachada*): se calcula su habitación (las celdas con techo unidas
+a la suya sin cruzar paredes, con los huecos de escalera) y se ocultan su techo y las plantas de
+arriba, salvo la pared del fondo, que se ve entera; la pared de delante queda en un zócalo.
+Sirve igual para mapas horizontales y para edificios de varias plantas. Los modos *círculo* y
+*planta* ocultan todo lo que hay por encima de su planta, en un círculo o en todo el mapa.
 
 La barra de título muestra la versión, los fps, los personajes por zona de detalle
 (cerca/medio/lejos), el estado de las rutinas, y los tiempos: simulación, **GPU** por tramo

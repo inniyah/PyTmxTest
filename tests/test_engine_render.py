@@ -118,10 +118,15 @@ def test_gpu_matches_cpu_reference_pixel_by_pixel(worlds, gl_viewer_factory, wor
 
 
 def test_character_half_hidden_by_the_doorway(worlds, gl_viewer_factory, tmp_path):
-    """En la puerta de la habitación, pegado a la pared sur: la pared tapa su mitad izquierda."""
+    """En la puerta de la habitación, pegado a la pared sur: la pared tapa su mitad izquierda
+    (sin recorte: prueba que la profundidad por píxel ordena bien personaje y pared; con el corte
+    de fachada, la pared quedaría en un zócalo)."""
     from PIL import Image
+
+    from engine.viewer import CUT_MODES
     viewer = gl_viewer_factory(worlds["course"], 700, 460, visible=False, spawn=(14.0, 7.8))
     try:
+        viewer.cut_mode = CUT_MODES.index("no")
         viewer.renderer.lighting.enabled = False
         viewer.camera.zoom = 2.5
         viewer._center_on_player(1.0)

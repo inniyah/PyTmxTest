@@ -23,6 +23,7 @@ fórmula, con la altura interpolada a lo alto del sprite.
 
 LEVEL_BIAS = 0.1     # píxeles de cercanía por planta (desempate de superficies coincidentes)
 MAX_LIGHTS = 1024    # luces puntuales en la vista (en una textura; las más cercanas, si hay más)
+MAX_BACK = 32           # columnas con "pared del fondo" para el corte de fachada
 MAX_CHUNK_LIGHTS = 32   # luces que recorre un píxel de un chunk: las que alcanzan ese chunk (si son
                         # más, ese chunk recorre todas las de la vista: nunca se pierde una luz)
 
@@ -98,6 +99,35 @@ void main() {
 }
 """
 
+# Corte de fachada (casa de muñecas), con una máscara de celdas que calcula la CPU: para cada
+# celda (x, y) y cuatro plantas desde u_mask_level (canales R, G, B, A): 0 se dibuja, 0.5 se corta
+# lo que esté a más de u_cut_keep sobre u_cut_feet (zócalo), 1 no se dibuja. Solo en interiores. Se mira la celda en
+# la que está cada píxel, desplazado: en la planta del suelo cortado (u_mask_floor), 25 cm al sur
+# (las paredes del borde sur caen en la fila de delante, las del norte se quedan); en las de
+# encima, 25 cm al norte (la pared del fondo cae fuera y se conserva entera hacia arriba).
+FACADE_GLSL = """
+uniform int u_facade;
+uniform sampler2D u_cut_mask;
+uniform ivec2 u_mask_origin;       // celda (x, y) de la esquina de la máscara
+uniform ivec2 u_mask_size;
+uniform int u_mask_level;          // planta del canal R
+uniform int u_mask_floor;          // planta del suelo que se conserva (zócalo)
+uniform float u_cut_feet;          // altura de ese suelo (m)
+uniform float u_cut_keep;          // zócalo que se conserva (m)
+uniform float u_facade_cell_w;
+const float FACADE_SHIFT = 0.25;
+float facade_mask(vec2 xz, int level) {
+    if (level < u_mask_floor) return 0.0;
+    xz.y += (level == u_mask_floor) ? FACADE_SHIFT : -FACADE_SHIFT;
+    ivec2 c = ivec2(floor(xz / u_facade_cell_w)) - u_mask_origin;
+    int k = level - u_mask_level;
+    if (k < 0 || k > 3 || c.x < 0 || c.y < 0 || c.x >= u_mask_size.x || c.y >= u_mask_size.y) return 0.0;
+    vec4 m = texelFetch(u_cut_mask, c, 0);
+    return k == 0 ? m.r : (k == 1 ? m.g : (k == 2 ? m.b : m.a));
+}
+"""
+
+
 TILE_FRAGMENT = """
 #version 330 core
 in float v_flip;
@@ -130,7 +160,7 @@ uniform int u_has_normal;
 uniform int u_material_tint;      // 1: teñir el suelo según su material (depuración)
 uniform vec3 u_material_colors[16];
 uniform float u_cell_w;
-""" + LIGHTING_GLSL + """
+""" + LIGHTING_GLSL + FACADE_GLSL + """
 out vec4 frag;
 
 void main() {
@@ -150,6 +180,11 @@ void main() {
     if (v_origin.y > u_cut_y && (u_cut_radius < 0.0 || distance(v_pos, u_cut_center) < u_cut_radius))
         discard;
     vec3 local = u_pos_min + position.rgb * (u_pos_max - u_pos_min);
+    if (u_facade == 1) {
+        vec3 world = v_origin + vec3(v_flip > 0.5 ? u_cell_w - local.x : local.x, local.y, local.z);
+        float m = facade_mask(world.xz, int(floor(v_origin.y / u_cell_h + 0.5)));
+        if (m > 0.75 || (m > 0.4 && world.y > u_cut_feet + u_cut_keep)) discard;
+    }
     float height = v_origin.y + local.y;
     float sz = u_scale.x, sy = u_scale.y;
     float closeness = height * (sz + sy * sy / sz) + v_screen_y * sy / sz
@@ -177,3 +212,4 @@ void main() {
     frag = (u_show_depth == 1) ? vec4(vec3(1.0 - depth), 1.0) : vec4(rgb, alpha);
 }
 """
+

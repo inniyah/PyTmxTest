@@ -23,10 +23,11 @@ from OpenGL.GL import (
     glClearColor, glClearDepth, glDeleteBuffers, glDeleteTextures, glDeleteVertexArrays,
     glDepthFunc, glEnable, glEnableVertexAttribArray, glGenBuffers,
     glGenTextures, glGenVertexArrays, glGetUniformLocation, glTexImage2D, glTexParameteri,
-    glUniform1f, glUniform1i, glUniform2f, glUniform3f, glUniform3fv, glUniformMatrix4fv, glUseProgram,
+    glUniform1f, glUniform1i, glUniform2f, glUniform2i, glUniform3f, glUniform3fv, glUniformMatrix4fv, glUseProgram,
     glVertexAttribPointer, glViewport,
 )
 from OpenGL.GL import (
+    GL_UNPACK_ALIGNMENT, glPixelStorei,
     GL_NEAREST_MIPMAP_NEAREST, GL_ONE, GL_RGBA32F, GL_TEXTURE_BASE_LEVEL, GL_TEXTURE_MAX_LEVEL,
     glBlendFuncSeparate, glTexSubImage2D,
 )
@@ -54,6 +55,29 @@ def ortho(left, right, bottom, top) -> np.ndarray:
 LIGHT_UNIFORMS = ("u_lighting", "u_sky", "u_ground", "u_sun_dir", "u_sun_color", "u_num_lights",
                   "u_use_list", "u_light_list[0]", "u_lights", "u_lamps")
 LIGHT_TEXTURE_UNIT = 4
+FACADE_UNIFORMS = ("u_facade", "u_cut_mask", "u_mask_origin", "u_mask_size", "u_mask_level",
+                   "u_mask_floor", "u_cut_feet", "u_cut_keep", "u_facade_cell_w")
+MASK_TEXTURE_UNIT = 5
+
+
+def set_facade_uniforms(u, facade):
+    """Corte de fachada: ``facade`` = dict(texture, origin, size, level, floor, feet, keep, cell_w)
+    o None (sin corte)."""
+    if facade is None:
+        glUniform1i(u["u_facade"], 0)
+        return
+    glUniform1i(u["u_facade"], 1)
+    glActiveTexture(GL_TEXTURE0 + MASK_TEXTURE_UNIT)
+    glBindTexture(GL_TEXTURE_2D, facade["texture"])
+    glUniform1i(u["u_cut_mask"], MASK_TEXTURE_UNIT)
+    glUniform2i(u["u_mask_origin"], *facade["origin"])
+    glUniform2i(u["u_mask_size"], *facade["size"])
+    glUniform1i(u["u_mask_level"], int(facade["level"]))
+    glUniform1i(u["u_mask_floor"], int(facade["floor"]))
+    glUniform1f(u["u_cut_feet"], float(facade["feet"]))
+    glUniform1f(u["u_cut_keep"], float(facade["keep"]))
+    glUniform1f(u["u_facade_cell_w"], float(facade["cell_w"]))
+    glActiveTexture(GL_TEXTURE0)
 
 
 @dataclass
@@ -249,6 +273,13 @@ class WorldRenderer:
         self.cut_level = None
         self.cut_center = (0.0, 0.0)
         self.cut_radius = -1.0
+        # Corte de fachada (si no es None, sustituye al de "por encima de cut_level"): ver
+        # set_facade_uniforms; la máscara de celdas la sube set_cut_mask
+        self.facade = None
+        self.mask_texture = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, self.mask_texture)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
         # Iluminación: luces del mundo (metros, color lineal) + luces dinámicas (el farol)
         self.lighting = Lighting()
         self.world_lights = np.array(view.store.lights(), dtype=np.float32).reshape(-1, 8)
@@ -280,7 +311,7 @@ class WorldRenderer:
             "u_closeness_range", "u_max_y", "u_show_depth", "u_level_bias", "u_cell_h",
             "u_height_tint", "u_cut_y", "u_cut_center", "u_cut_radius", "u_albedo", "u_normal",
             "u_has_albedo", "u_has_normal", "u_cell_w", "u_lod", "u_material_tint",
-            "u_material_colors[0]", *LIGHT_UNIFORMS)}
+            "u_material_colors[0]", *LIGHT_UNIFORMS, *FACADE_UNIFORMS)}
 
     # --- Qué chunks se ven ---
 
@@ -340,8 +371,9 @@ class WorldRenderer:
         glUniform1f(self.u["u_level_bias"], LEVEL_BIAS)
         glUniform1f(self.u["u_cell_h"], g.cell_h)
         glUniform1i(self.u["u_height_tint"], int(self.height_tint))
-        cut_y = 1e9 if self.cut_level is None else (self.cut_level + 0.5) * g.cell_h
+        cut_y = 1e9 if self.cut_level is None or self.facade is not None else (self.cut_level + 0.5) * g.cell_h
         glUniform1f(self.u["u_cut_y"], cut_y)
+        set_facade_uniforms(self.u, self.facade)
         glUniform2f(self.u["u_cut_center"], *self.cut_center)
         glUniform1f(self.u["u_cut_radius"], self.cut_radius)
         glUniform1f(self.u["u_lod"], self.lod(camera))
@@ -428,6 +460,22 @@ class WorldRenderer:
             lights = lights[order[:MAX_LIGHTS]]
         return lights
 
+    def set_cut_mask(self, mask: np.ndarray, origin, level: int, feet: float, keep: float, floor: int = None):
+        """Sube la máscara de corte (alto, ancho, 4) uint8, canales = plantas level .. level + 3:
+        0 se dibuja, 128 zócalo (lo que esté a más de ``keep`` sobre ``feet``), 255 se oculta.
+        ``floor``: planta del suelo que se conserva (por defecto, ``level``)."""
+        mask = np.ascontiguousarray(mask, np.uint8)
+        glActiveTexture(GL_TEXTURE0 + MASK_TEXTURE_UNIT)
+        glBindTexture(GL_TEXTURE_2D, self.mask_texture)
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, mask.shape[1], mask.shape[0], 0, GL_RGBA, GL_UNSIGNED_BYTE, mask)
+        g = self.geo
+        self.facade_state = {"texture": self.mask_texture, "origin": (int(origin[0]), int(origin[1])),
+                       "size": (int(mask.shape[1]), int(mask.shape[0])), "level": int(level),
+                       "floor": int(level if floor is None else floor),
+                       "feet": float(feet), "keep": float(keep), "cell_w": g.cell_w}
+        self.facade = self.facade_state
+
     def lod(self, camera: Camera) -> float:
         """Nivel del atlas que se lee a este zoom: el que da como mucho dos texels por píxel."""
         if not self.use_mipmaps or self.atlas.levels == 0 or camera.zoom >= 0.5:
@@ -466,6 +514,8 @@ class WorldRenderer:
             data = np.zeros((len(lights), 2, 4), np.float32)
             data[:, 0, :3], data[:, 0, 3] = lights[:, 0:3], lights[:, 6]
             data[:, 1, :3] = lights[:, 3:6] * lights[:, 7:8]
+            # Su propia unidad: enlazarla en la que esté activa pisaría otra textura (la máscara)
+            glActiveTexture(GL_TEXTURE0 + LIGHT_TEXTURE_UNIT)
             glBindTexture(GL_TEXTURE_2D, self.light_texture)
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 2, len(lights), GL_RGBA, GL_FLOAT, data)
 
@@ -492,3 +542,4 @@ class WorldRenderer:
         self.meshes.clear()
         self.atlas.delete()
         glDeleteTextures(1, [self.light_texture])
+        glDeleteTextures(1, [self.mask_texture])

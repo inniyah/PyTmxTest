@@ -22,8 +22,8 @@ from OpenGL.GL import (
 from OpenGL.GL.shaders import compileProgram, compileShader
 from PIL import Image
 
-from .shaders import LEVEL_BIAS, LIGHTING_GLSL
-from .world_renderer import LIGHT_UNIFORMS, _texture
+from .shaders import FACADE_GLSL, LEVEL_BIAS, LIGHTING_GLSL
+from .world_renderer import FACADE_UNIFORMS, LIGHT_UNIFORMS, _texture, set_facade_uniforms
 
 SPRITE_VERTEX = """
 #version 330 core
@@ -69,12 +69,18 @@ uniform float u_cut_level;         // ocultar lo que esté por encima de esta pl
 uniform vec2 u_cut_center;         // ...en este círculo (radio < 0: en todo el mapa)
 uniform float u_cut_radius;
 uniform float u_max_level;
-""" + LIGHTING_GLSL + """
+""" + LIGHTING_GLSL + FACADE_GLSL + """
 out vec4 frag;
 void main() {
     if (v_level > u_max_level + 0.5) discard;
-    if (v_level > u_cut_level + 0.5 && (u_cut_radius < 0.0 || distance(v_pos, u_cut_center) < u_cut_radius))
+    bool in_circle = u_cut_radius < 0.0 || distance(v_pos, u_cut_center) < u_cut_radius;
+    if (u_facade == 1) {
+        // Fachada: los de las plantas de arriba cuya celda está oculta
+        if (facade_mask(vec2(v_pos.x * u_m_per_px, v_world.y), int(floor(v_level + 0.5))) > 0.75)
+            discard;
+    } else if (v_level > u_cut_level + 0.5 && in_circle) {
         discard;
+    }
     vec4 color;
     if (u_shadow == 1) {
         float r = length(v_uv);
@@ -192,7 +198,8 @@ class SpriteRenderer:
                                       compileShader(SPRITE_FRAGMENT, GL_FRAGMENT_SHADER))
         self.u = {k: glGetUniformLocation(self.program, k) for k in (
             "u_projection", "u_sheet", "u_shadow", "u_scale", "u_closeness_range", "u_show_depth",
-            "u_m_per_px", "u_cut_level", "u_cut_center", "u_cut_radius", "u_max_level", *LIGHT_UNIFORMS)}
+            "u_m_per_px", "u_cut_level", "u_cut_center", "u_cut_radius", "u_max_level", *LIGHT_UNIFORMS,
+            *FACADE_UNIFORMS)}
         self.vao, self.vbo = glGenVertexArrays(1), glGenBuffers(1)
         glBindVertexArray(self.vao)
         glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
@@ -267,6 +274,7 @@ class SpriteRenderer:
         glUniform2f(self.u["u_cut_center"], *center)
         glUniform1f(self.u["u_cut_radius"], float(radius))
         glUniform1f(self.u["u_max_level"], float(max_level))
+        set_facade_uniforms(self.u, getattr(lights, "facade", None) if lights is not None else None)
         if lights is not None:
             lights.set_light_uniforms(self.u, camera)
         else:

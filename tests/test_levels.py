@@ -190,3 +190,113 @@ def test_npc_upstairs_is_hidden_in_the_cut_window(world, viewer_factory, tmp_pat
         assert visible_without_cut > 100 and green_pixels() == 0
     finally:
         v.close()
+
+
+# --- Corte de fachada ---------------------------------------------------------------------
+
+def _shot(v, tmp_path, mode):
+    from PIL import Image
+
+    from engine.viewer import CUT_MODES
+    v.cut_mode = CUT_MODES.index(mode)
+    v.screenshot(tmp_path / f"{mode}.png")
+    return np.asarray(Image.open(tmp_path / f"{mode}.png").convert("RGB")).astype(int)
+
+
+def test_facade_room_is_the_building_interior(world, viewer_factory):
+    """La habitación: las celdas con techo del edificio unidas sin cruzar paredes (con el hueco de
+    la escalera); al aire libre, ninguna (al aire libre nunca se oculta nada)."""
+    v = viewer_factory(world, 320, 200, visible=False, spawn=(17.5, 4.5), spawn_level=0)
+    try:
+        x0, y0, inside = v.room(17, 4, 0, 0.0)
+        ys, xs = np.nonzero(inside)
+        assert xs.min() + x0 >= 14 and xs.max() + x0 <= 21 and ys.min() + y0 >= 3   # dentro del edificio
+        assert inside.sum() > 20
+        assert v.facade_cut_mask(3, 14, 0, 0.0) is None                       # en la calle
+    finally:
+        v.close()
+
+
+def test_facade_never_hides_anything_outdoors(world, viewer_factory, tmp_path):
+    for spawn in ((3.5, 14.5), (13.5, 6.5), (17.5, 12.5)):            # calle, junto al edificio, delante
+        v = viewer_factory(world, 480, 320, visible=False, spawn=spawn, spawn_level=0)
+        try:
+            v.renderer.lighting.enabled = False
+            assert not v.covered()
+            assert np.array_equal(_shot(v, tmp_path, "no"), _shot(v, tmp_path, "fachada"))
+        finally:
+            v.close()
+
+
+def _three(v, tmp_path):
+    imgs = {m: _shot(v, tmp_path, m) for m in ("no", "círculo", "fachada")}
+    changed = {m: np.abs(imgs[m] - imgs["no"]).sum(-1) > 30 for m in ("círculo", "fachada")}
+    row = int((v._player_screen()[1] - v.camera.y) * v.camera.zoom)
+    return changed["círculo"], changed["fachada"], row
+
+
+def test_facade_keeps_the_back_wall_whole(world, viewer_factory, tmp_path):
+    """Junto a la pared del fondo, el círculo de antes le abre un hueco por el que se ve lo de
+    detrás; la fachada la conserva entera."""
+    v = viewer_factory(world, 640, 420, visible=False, spawn=(17.5, 4.5), spawn_level=0)
+    try:
+        v.renderer.lighting.enabled = False
+        v.camera.zoom = 0.9
+        v._center_on_player(1.0)
+        circle, facade, _row = _three(v, tmp_path)
+        assert v.renderer.facade is not None                   # bajo techo: activa
+        assert (circle & ~facade).sum() > 1000                 # lo que el círculo mordía, se queda
+    finally:
+        v.close()
+
+
+def _green_player(v):
+    """El jugador teñido de verde puro y sin iluminación: fácil de contar en la imagen."""
+    v.renderer.lighting.enabled = False
+    v.table.tint[v.table.row(v.player_handle)] = (0.0, 1.0, 0.0)
+
+
+def _green(img):
+    return int(((img[..., 1] > 150) & (img[..., 0] < 60) & (img[..., 2] < 60)).sum())
+
+
+def test_facade_shows_the_player_under_the_upper_floor(world, viewer_factory, tmp_path):
+    """Junto a la pared del fondo: sin recorte, el forjado de arriba lo tapa; con la fachada, no."""
+    v = viewer_factory(world, 640, 420, visible=False, spawn=(17.5, 4.5), spawn_level=0)
+    try:
+        _green_player(v)
+        v.camera.zoom = 0.9
+        v._center_on_player(1.0)
+        assert _green(_shot(v, tmp_path, "no")) < 20 and _green(_shot(v, tmp_path, "fachada")) > 200
+    finally:
+        v.close()
+
+
+def test_facade_cuts_the_front_walls_down(world, viewer_factory, tmp_path):
+    """Junto a la puerta: la pared de delante (por debajo de él en la pantalla) queda en zócalo."""
+    v = viewer_factory(world, 640, 420, visible=False, spawn=(17.5, 7.5), spawn_level=0)
+    try:
+        _green_player(v)
+        v.camera.zoom = 0.9
+        v._center_on_player(1.0)
+        none, facade = _shot(v, tmp_path, "no"), _shot(v, tmp_path, "fachada")
+        row = int((v._player_screen()[1] - v.camera.y) * v.camera.zoom)
+        changed = np.abs(facade - none).sum(-1) > 30
+        assert changed[row + 5:].sum() > 500 and _green(facade) > 200
+    finally:
+        v.close()
+
+
+def test_facade_hides_npcs_upstairs_in_front(world, viewer_factory, tmp_path):
+    v = viewer_factory(world, 480, 320, visible=False, spawn=(17.5, 6.5), spawn_level=0)
+    try:
+        v.renderer.lighting.enabled = False
+        npc = v.table.spawn("guardia", [17.5 * CW, 3.0, 7.5 * CW], brain=0)    # planta 1, delante
+        v.table.tint[v.table.row(npc)] = (0.0, 1.0, 0.0)
+        v._center_on_player(1.0)
+
+        def green(img):
+            return int(((img[..., 1] > 150) & (img[..., 0] < 60) & (img[..., 2] < 60)).sum())
+        assert green(_shot(v, tmp_path, "no")) > 100 and green(_shot(v, tmp_path, "fachada")) == 0
+    finally:
+        v.close()
