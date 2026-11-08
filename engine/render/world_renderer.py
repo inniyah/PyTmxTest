@@ -23,12 +23,13 @@ from OpenGL.GL import (
     glClearColor, glClearDepth, glDeleteBuffers, glDeleteTextures, glDeleteVertexArrays,
     glDepthFunc, glEnable, glEnableVertexAttribArray, glGenBuffers,
     glGenTextures, glGenVertexArrays, glGetUniformLocation, glTexImage2D, glTexParameteri,
-    glUniform1f, glUniform1i, glUniform2f, glUniform3f, glUniform3fv, glUniform4fv,
-    glUniformMatrix4fv, glUseProgram,
+    glUniform1f, glUniform1i, glUniform2f, glUniform3f, glUniformMatrix4fv, glUseProgram,
     glVertexAttribPointer, glViewport,
 )
-from OpenGL.GL import GL_ONE, glBlendFuncSeparate
+from OpenGL.GL import GL_ONE, GL_RGBA32F, glBlendFuncSeparate, glTexSubImage2D
 from OpenGL.raw.GL.VERSION.GL_1_1 import glDrawElements as _raw_draw_elements
+from OpenGL.raw.GL.VERSION.GL_2_0 import glUniform1i as _raw_uniform1i
+from OpenGL.raw.GL.VERSION.GL_2_0 import glUniform1iv as _raw_uniform1iv
 from OpenGL.raw.GL.VERSION.GL_3_0 import glBindVertexArray as _raw_bind_vertex_array
 from OpenGL.GL.shaders import compileProgram, compileShader
 from PIL import Image
@@ -37,7 +38,7 @@ from engine import png16
 from engine.world.view import WorldView
 
 from .geometry import FLOATS_PER_VERTEX, AtlasLayout, WorldGeometry, chunk_quads
-from .shaders import LEVEL_BIAS, MAX_LIGHTS, TILE_FRAGMENT, TILE_VERTEX
+from .shaders import LEVEL_BIAS, MAX_CHUNK_LIGHTS, MAX_LIGHTS, TILE_FRAGMENT, TILE_VERTEX
 
 
 def ortho(left, right, bottom, top) -> np.ndarray:
@@ -48,7 +49,8 @@ def ortho(left, right, bottom, top) -> np.ndarray:
 
 
 LIGHT_UNIFORMS = ("u_lighting", "u_sky", "u_ground", "u_sun_dir", "u_sun_color", "u_num_lights",
-                  "u_light_pos[0]", "u_light_col[0]", "u_lamps")
+                  "u_use_list", "u_light_list[0]", "u_lights", "u_lamps")
+LIGHT_TEXTURE_UNIT = 4
 
 
 @dataclass
@@ -179,6 +181,17 @@ class WorldRenderer:
         self.world_lights = np.array(view.store.lights(), dtype=np.float32).reshape(-1, 8)
         self.dynamic_lights = []
         self.draw_calls = 0
+        self.timer = None              # GpuTimer opcional: mide el dibujo del mundo
+        # Luces de la vista en una textura (fila i: posición y radio; color); se sube cada frame
+        self.light_texture = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, self.light_texture)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 2, MAX_LIGHTS, 0, GL_RGBA, GL_FLOAT, None)
+        self.frame_lights = np.zeros((0, 8), np.float32)
+        self.chunk_lights = {}
+        self.per_chunk_lights = True   # False: cada tile recorre todas las luces de la vista (depurar)
+        self.use_material_maps = True  # False: sin leer albedo ni normales (diagnóstico, tecla M)
 
         self.program = compileProgram(compileShader(TILE_VERTEX, GL_VERTEX_SHADER),
                                       compileShader(TILE_FRAGMENT, GL_FRAGMENT_SHADER))
@@ -253,21 +266,36 @@ class WorldRenderer:
         glUniform1i(self.u["u_albedo"], 2)
         glUniform1i(self.u["u_normal"], 3)
         glUniform1f(self.u["u_cell_w"], g.cell_w)
+        self.upload_lights(camera, visible)
         self.set_light_uniforms(self.u, camera)
+        glUniform1i(self.u["u_use_list"], int(self.per_chunk_lights))   # los tiles: las de su chunk
 
         # Texturas y uniforms una vez por página del atlas; por chunk, solo su malla y el dibujo.
         # Dentro de cada página, los chunks van de norte a sur (mejor mezcla de transparencias).
         self.draw_calls = 0
+        if self.timer is not None:
+            with self.timer("mundo"):
+                self._draw_pages(visible)
+        else:
+            self._draw_pages(visible)
+        glBindVertexArray(0)
+        glUseProgram(0)
+
+    def _draw_pages(self, visible):
         by_page = {}
         for key in visible:
             for page, vao, _vbo, _ebo, count in self.meshes[key].parts:
-                by_page.setdefault(page, []).append((vao, count))
+                by_page.setdefault(page, []).append((vao, count, key))
+        loc_num, loc_list, loc_use = self.u["u_num_lights"], self.u["u_light_list[0]"], self.u["u_use_list"]
+        no_lights = (0, None)
+        all_lights = len(self.frame_lights)
         for page, parts in by_page.items():
             glActiveTexture(GL_TEXTURE0)
             glBindTexture(GL_TEXTURE_2D, self.atlas.color[page])
             glActiveTexture(GL_TEXTURE1)
             glBindTexture(GL_TEXTURE_2D, self.atlas.position[page])
-            has_albedo, has_normal = page in self.atlas.albedo, page in self.atlas.normal
+            maps = self.use_material_maps
+            has_albedo, has_normal = maps and page in self.atlas.albedo, maps and page in self.atlas.normal
             glUniform1i(self.u["u_has_albedo"], int(has_albedo))
             glUniform1i(self.u["u_has_normal"], int(has_normal))
             if has_albedo:
@@ -277,31 +305,81 @@ class WorldRenderer:
                 glActiveTexture(GL_TEXTURE3)
                 glBindTexture(GL_TEXTURE_2D, self.atlas.normal[page])
             # El bucle que crece con el zoom: funciones sin envoltorio (directas a OpenGL)
-            for vao, count in parts:
+            for vao, count, key in parts:
+                if self.per_chunk_lights:
+                    entry = self.chunk_lights.get(key, no_lights)
+                    if entry is None:                      # demasiadas: todas las de la vista
+                        _raw_uniform1i(loc_use, 0)
+                        _raw_uniform1i(loc_num, all_lights)
+                    else:
+                        n, indices = entry
+                        _raw_uniform1i(loc_use, 1)
+                        _raw_uniform1i(loc_num, n)
+                        if n:
+                            _raw_uniform1iv(loc_list, n, indices)
                 _raw_bind_vertex_array(int(vao))
                 _raw_draw_elements(GL_TRIANGLES, count, GL_UNSIGNED_INT, None)
                 self.draw_calls += 1
-        glBindVertexArray(0)
-        glUseProgram(0)
 
     # --- Luces ---
 
     def active_lights(self, camera: Camera) -> np.ndarray:
-        """Hasta MAX_LIGHTS luces (filas x, y, z, r, g, b, radio, intensidad), las más cercanas a la vista."""
+        """Luces (filas x, y, z, r, g, b, radio, intensidad) que pueden alumbrar algo de la vista;
+        si hay más de MAX_LIGHTS, las más cercanas al centro."""
         rows = [self.world_lights] + [np.asarray(self.dynamic_lights, np.float32).reshape(-1, 8)]
         lights = np.concatenate(rows) if any(len(r) for r in rows) else np.zeros((0, 8), np.float32)
+        if not len(lights):
+            return lights
+        g = self.geo
+        l, t, r, b = camera.bounds()
+        sx = lights[:, 0] * g.tile_w / g.cell_w
+        sy = lights[:, 2] * g.sz - lights[:, 1] * g.sy
+        reach = lights[:, 6] * g.tile_w / g.cell_w + g.level_h            # radio en px y algo de altura
+        inside = (sx > l - reach) & (sx < r + reach) & (sy > t - reach) & (sy < b + reach + g.level_h)
+        lights, sx, sy = lights[inside], sx[inside], sy[inside]
         if len(lights) > MAX_LIGHTS:
-            g = self.geo
-            l, t, r, b = camera.bounds()
-            cx, cy = (l + r) / 2, (t + b) / 2
-            sx = lights[:, 0] * g.tile_w / g.cell_w
-            sy = lights[:, 2] * g.sz - lights[:, 1] * g.sy
-            order = np.argsort((sx - cx) ** 2 + (sy - cy) ** 2)
+            order = np.argsort((sx - (l + r) / 2) ** 2 + (sy - (t + b) / 2) ** 2)
             lights = lights[order[:MAX_LIGHTS]]
         return lights
 
+    def chunk_light_lists(self, keys, lights: np.ndarray) -> dict:
+        """Para cada chunk, las luces (índices en ``lights``) cuyo radio alcanza su caja en planta.
+        Si son más de MAX_CHUNK_LIGHTS, el chunk se marca con None: recorrerá todas las de la vista
+        (más lento, pero ninguna luz se pierde)."""
+        if not len(keys) or not len(lights):
+            return {}
+        g, v = self.geo, self.view
+        span = v.chunk_size * g.cell_w
+        k = np.asarray(keys, float).reshape(-1, 2)
+        x0, z0 = k[:, 0:1] * span, k[:, 1:2] * span
+        lx, lz, lr = lights[None, :, 0], lights[None, :, 2], lights[None, :, 6]
+        dx = np.maximum(np.maximum(x0 - lx, lx - (x0 + span)), 0.0)
+        dz = np.maximum(np.maximum(z0 - lz, lz - (z0 + span)), 0.0)
+        hits = dx * dx + dz * dz < lr * lr
+        out = {}
+        for i, key in enumerate(keys):
+            idx = np.nonzero(hits[i])[0]
+            if idx.size > MAX_CHUNK_LIGHTS:
+                out[key] = None
+            elif idx.size:
+                out[key] = (int(idx.size), np.ascontiguousarray(idx, np.int32))
+        return out
+
+    def upload_lights(self, camera: Camera, visible):
+        """Sube a la textura las luces de la vista y prepara la lista de cada chunk visible."""
+        lights = self.active_lights(camera) if self.lighting.enabled else np.zeros((0, 8), np.float32)
+        self.frame_lights = lights
+        self.chunk_lights = self.chunk_light_lists(list(visible), lights)
+        if len(lights):
+            data = np.zeros((len(lights), 2, 4), np.float32)
+            data[:, 0, :3], data[:, 0, 3] = lights[:, 0:3], lights[:, 6]
+            data[:, 1, :3] = lights[:, 3:6] * lights[:, 7:8]
+            glBindTexture(GL_TEXTURE_2D, self.light_texture)
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 2, len(lights), GL_RGBA, GL_FLOAT, data)
+
     def set_light_uniforms(self, u, camera: Camera):
-        """Uniforms de iluminación, comunes a los tiles y a los sprites."""
+        """Uniforms de iluminación, comunes a los tiles y a los sprites. Por defecto se recorren
+        todas las luces de la vista (los sprites); los tiles pasan a la lista de su chunk."""
         L = self.lighting
         glUniform1i(u["u_lighting"], int(L.enabled))
         glUniform3f(u["u_sky"], *L.sky)
@@ -310,16 +388,15 @@ class WorldRenderer:
         glUniform3f(u["u_sun_dir"], *(sun / np.linalg.norm(sun)))
         glUniform3f(u["u_sun_color"], *L.sun_color)
         glUniform1f(u["u_lamps"], L.lamps)
-        lights = self.active_lights(camera)
-        glUniform1i(u["u_num_lights"], len(lights))
-        if len(lights):
-            pos = np.concatenate([lights[:, 0:3], lights[:, 6:7]], axis=1).astype(np.float32)
-            col = (lights[:, 3:6] * lights[:, 7:8]).astype(np.float32)
-            glUniform4fv(u["u_light_pos[0]"], len(lights), pos)
-            glUniform3fv(u["u_light_col[0]"], len(lights), col)
+        glActiveTexture(GL_TEXTURE0 + LIGHT_TEXTURE_UNIT)
+        glBindTexture(GL_TEXTURE_2D, self.light_texture)
+        glUniform1i(u["u_lights"], LIGHT_TEXTURE_UNIT)
+        glUniform1i(u["u_use_list"], 0)
+        glUniform1i(u["u_num_lights"], len(self.frame_lights))
 
     def delete(self):
         for mesh in self.meshes.values():
             mesh.delete()
         self.meshes.clear()
         self.atlas.delete()
+        glDeleteTextures(1, [self.light_texture])

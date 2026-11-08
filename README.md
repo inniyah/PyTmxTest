@@ -223,8 +223,9 @@ todos los cilindros a la vez (≈ 0.45 ms por paso con uno, ≈ 2.3 ms con cien)
 (200 personajes andando y saltando al azar) comprueba que nadie se mete en el suelo.
 
 **Iluminación.** Por píxel y en espacio lineal: ambiente de cielo y suelo según la normal, un
-sol y hasta 32 luces puntuales (las más cercanas a la vista), sobre el albedo (color sin luz)
-y las normales del atlas; los personajes también se iluminan. Las luces se colocan en Tiled
+sol y luces puntuales, sobre el albedo (color sin luz) y las normales del atlas. Las luces de
+la vista (hasta 1024) van en una textura, y cada chunk recorre solo las que lo alcanzan (si son
+más de 32, todas las de la vista): el coste por píxel no crece con las luces en pantalla; los personajes también se iluminan. Las luces se colocan en Tiled
 como objetos punto de clase `light` en una capa de objetos dentro de cada planta, con
 propiedades opcionales `color`, `radius` (m), `intensity` y `height` (m sobre el suelo de la
 planta); el compilador las guarda en la tabla `lights` del mundo. De día las luces puntuales
@@ -258,7 +259,10 @@ python -m engine.viewer maps/terrain1k/terrain1k.cworld --npcs 3000
 **Rendimiento del dibujo.** Las texturas del atlas se enlazan una vez por página y frame, y
 cada chunk visible cuesta dos llamadas directas a OpenGL; los personajes fuera de la vista no se
 dibujan. PyOpenGL no comprueba errores tras cada llamada (es caro); para depurar, ejecuta con
-`ENGINE_GL_DEBUG=1`. Si un frame tarda mucho, la simulación da como mucho 4 pasos por frame: el
+`ENGINE_GL_DEBUG=1`. La tecla M deja de leer los mapas de albedo y normales (con la
+iluminación encendida), para separar el coste de leer el atlas del de las luces. La barra de título muestra el tiempo de GPU de cada tramo (mundo, sombras y
+personajes, medido con consultas de OpenGL sin parar el dibujo) y el de CPU de preparar el frame.
+Si un frame tarda mucho, la simulación da como mucho 4 pasos por frame: el
 juego va más lento un momento en lugar de hundirse.
 
 **Ocultar lo que hay encima.** Cuando el personaje tiene algo por encima de su planta en su

@@ -234,3 +234,89 @@ def test_only_visible_actors_are_drawn(terrain):
             assert not (left < sx < right and top < sy < bottom)
     finally:
         v.close()
+
+
+def test_gpu_timer_reports_each_pass(terrain):
+    glfw = pytest.importorskip("glfw")
+    if not glfw.init():
+        pytest.skip("sin pantalla para OpenGL")
+    glfw.window_hint(glfw.VISIBLE, 0)
+    probe = glfw.create_window(16, 16, "sonda", None, None)
+    if not probe:
+        glfw.terminate()
+        pytest.skip("no se puede crear una ventana OpenGL")
+    glfw.destroy_window(probe)
+    from engine.viewer import Viewer
+    v = Viewer(terrain, 320, 200, visible=False, spawn=(64, 64), npcs=50, seed=1)
+    try:
+        for _ in range(12):
+            v.frame()
+            v.gpu_timer.frame_done()
+            glfw.swap_buffers(v.window)
+        assert {"mundo", "sombras", "personajes"} <= set(v.gpu_timer.ms)
+        assert all(ms >= 0 for ms in v.gpu_timer.ms.values())
+        assert "GPU" in v.timing_text() and "CPU dibujo" in v.timing_text()
+    finally:
+        v.close()
+
+
+def shot_without(v):
+    """Captura sin luces puntuales (para comprobar que la prueba de luces no es trivial)."""
+    from PIL import Image
+    saved = v.renderer.world_lights
+    v.renderer.world_lights = saved[:0]
+    path = "/tmp/_sin_luces.png"
+    v.screenshot(path)
+    v.renderer.world_lights = saved
+    return np.asarray(Image.open(path).convert("RGB")).astype(int)
+
+
+@pytest.mark.parametrize("spacing", [10.0, 4.0], ids=["en las listas", "demasiadas: todas"])
+def test_per_chunk_light_lists_match_all_lights(terrain, tmp_path, spacing):
+    """Con chunks pequeños (muchos bordes) y de noche, asignar las luces por chunk da la misma imagen
+    que recorrer todas las luces de la vista en cada píxel: ninguna luz se pierde junto a un borde,
+    tampoco en un chunk con más luces de las que caben en su lista."""
+    glfw = pytest.importorskip("glfw")
+    if not glfw.init():
+        pytest.skip("sin pantalla para OpenGL")
+    glfw.window_hint(glfw.VISIBLE, 0)
+    probe = glfw.create_window(16, 16, "sonda", None, None)
+    if not probe:
+        glfw.terminate()
+        pytest.skip("no se puede crear una ventana OpenGL")
+    glfw.destroy_window(probe)
+    from PIL import Image
+
+    from engine.render.shaders import MAX_CHUNK_LIGHTS
+    from engine.viewer import Viewer
+    v = Viewer(terrain, 640, 400, visible=False, spawn=(64, 64), npcs=0)
+    try:
+        v.set_night(True)
+        v.lantern = False
+        v.camera.zoom = 0.18
+        v._center_on_player(1.0)
+        # Más luces: una rejilla por todo el mapa, también sobre los bordes de los chunks
+        g = v.renderer.geo
+        xs, zs = np.meshgrid(np.arange(4, 256, spacing), np.arange(4, 256, spacing))
+        extra = np.zeros((xs.size, 8), np.float32)
+        extra[:, 0], extra[:, 2] = xs.ravel(), zs.ravel()
+        extra[:, 1] = v.sim.physics.support(extra[:, 0], extra[:, 2], np.full(xs.size, 99.0), search=40) + 2.0
+        extra[:, 3:6], extra[:, 6], extra[:, 7] = (1.0, 0.7, 0.4), 7.0, 1.2
+        v.renderer.world_lights = np.concatenate([v.renderer.world_lights, extra]).astype(np.float32)
+
+        def shot(per_chunk):
+            v.renderer.per_chunk_lights = per_chunk
+            v.screenshot(tmp_path / "s.png")
+            return np.asarray(Image.open(tmp_path / "s.png").convert("RGB")).astype(int)
+        per_chunk, everything = shot(True), shot(False)
+        assert len(v.renderer.frame_lights) > 32                 # más que el antiguo tope
+        entries = list(v.renderer.chunk_lights.values())
+        if spacing >= 10:
+            assert all(e is not None and e[0] <= MAX_CHUNK_LIGHTS for e in entries)
+        else:
+            assert any(e is None for e in entries)                # se prueba la reserva
+        assert np.abs(per_chunk - everything).max() <= 2
+        assert np.abs(per_chunk - shot_without(v)).mean() > 1      # las luces de verdad alumbran
+        del g
+    finally:
+        v.close()

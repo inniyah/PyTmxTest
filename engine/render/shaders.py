@@ -22,7 +22,9 @@ fórmula, con la altura interpolada a lo alto del sprite.
 """
 
 LEVEL_BIAS = 0.1     # píxeles de cercanía por planta (desempate de superficies coincidentes)
-MAX_LIGHTS = 32      # luces puntuales por frame (las más cercanas a la vista)
+MAX_LIGHTS = 1024    # luces puntuales en la vista (en una textura; las más cercanas, si hay más)
+MAX_CHUNK_LIGHTS = 32   # luces que recorre un píxel de un chunk: las que alcanzan ese chunk (si son
+                        # más, ese chunk recorre todas las de la vista: nunca se pierde una luz)
 
 # Iluminación (común a tiles y sprites), en espacio lineal: ambiente de cielo y suelo según la
 # normal, un sol direccional y luces puntuales con caída suave hasta su radio.
@@ -32,22 +34,25 @@ uniform vec3 u_sky;
 uniform vec3 u_ground;
 uniform vec3 u_sun_dir;           // hacia el sol, normalizado
 uniform vec3 u_sun_color;
-uniform int u_num_lights;
-uniform vec4 u_light_pos[@MAX_LIGHTS@];     // xyz en metros, w = radio
-uniform vec3 u_light_col[@MAX_LIGHTS@];     // color lineal por intensidad
+uniform sampler2D u_lights;       // fila i: (0, i) = xyz en metros y radio; (1, i) = color lineal
+uniform int u_num_lights;         // cuántas luces recorrer...
+uniform int u_use_list;           // ...1: las de u_light_list (las del chunk); 0: las primeras
+uniform int u_light_list[@MAX_CHUNK_LIGHTS@];
 uniform float u_lamps;            // factor de las luces puntuales (de día se notan menos)
 
 vec3 light_at(vec3 world, vec3 n, float wrap) {
     vec3 light = mix(u_ground, u_sky, n.y * 0.5 + 0.5);
     light += u_sun_color * max((dot(n, u_sun_dir) + wrap) / (1.0 + wrap), 0.0);
-    for (int i = 0; i < u_num_lights; i++) {
-        vec3 d = u_light_pos[i].xyz - world;
+    for (int k = 0; k < u_num_lights; k++) {
+        int i = (u_use_list == 1) ? u_light_list[k] : k;
+        vec4 p = texelFetch(u_lights, ivec2(0, i), 0);
+        vec3 d = p.xyz - world;
         float dist = length(d);
-        float r = u_light_pos[i].w;
+        float r = p.w;
         if (dist < r) {
-            float k = 1.0 - (dist * dist) / (r * r);
+            float q = 1.0 - (dist * dist) / (r * r);
             float lambert = max((dot(n, d / max(dist, 1e-4)) + wrap) / (1.0 + wrap), 0.0);
-            light += u_lamps * u_light_col[i] * k * k * lambert;
+            light += u_lamps * texelFetch(u_lights, ivec2(1, i), 0).rgb * q * q * lambert;
         }
     }
     return light;
@@ -60,7 +65,7 @@ vec3 shoulder(vec3 c) {
     return min(c, vec3(0.8)) + 0.2 * (1.0 - exp(-over / 0.2));
 }
 vec3 to_srgb(vec3 c) { return pow(shoulder(max(c, 0.0)), vec3(1.0 / 2.2)); }
-""".replace("@MAX_LIGHTS@", str(MAX_LIGHTS))
+""".replace("@MAX_CHUNK_LIGHTS@", str(MAX_CHUNK_LIGHTS))
 
 TILE_VERTEX = """
 #version 330 core

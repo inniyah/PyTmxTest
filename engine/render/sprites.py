@@ -7,6 +7,7 @@ suelo bajo los pies, con Z variando a lo largo del quad.
 """
 
 import ctypes
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 import numpy as np
@@ -128,6 +129,11 @@ def facing_index(dx: float, dz: float, previous: int, directions: int = 4,
     return int(np.floor(angle / sector + 0.5)) % directions
 
 
+@contextmanager
+def _nothing():
+    yield
+
+
 def facing_indices(dx, dz, previous, directions: int = 4, hysteresis_deg: float = HYSTERESIS_DEG):
     """Versión vectorizada de ``facing_index`` para muchos personajes a la vez."""
     dx, dz, previous = np.asarray(dx, float), np.asarray(dz, float), np.asarray(previous)
@@ -195,6 +201,7 @@ class SpriteRenderer:
             glVertexAttribPointer(loc, size, GL_FLOAT, GL_FALSE, FLOATS * 4, ctypes.c_void_p(off * 4))
         glBindVertexArray(0)
         self.draw_calls = 0
+        self.timer = None              # GpuTimer opcional: mide sombras y personajes
 
     # --- Vértices (numpy, sin OpenGL) ---
 
@@ -287,14 +294,17 @@ class SpriteRenderer:
         level = np.floor(feet[:, 1] / g.cell_h + 1e-6)
         ground = np.asarray(ground, float)
         has_ground = ground > -1e8
+        timed = self.timer if self.timer is not None else (lambda _name: _nothing())
         glDepthMask(GL_FALSE)
         if has_ground.any():
             sv = self.shadow_vertices(feet[has_ground], ground[has_ground], np.asarray(radius)[has_ground],
                                       level[has_ground])
-            self._draw(sv, 0, True, camera, show_depth, lights, cut, max_level)
+            with timed("sombras"):
+                self._draw(sv, 0, True, camera, show_depth, lights, cut, max_level)
         glDepthMask(GL_TRUE)
         verts = self.sprite_vertices(sheet, feet, body_h, rows, cols, tint, level)
-        self._draw(verts, sheet.texture, False, camera, show_depth, lights, cut, max_level)
+        with timed("personajes"):
+            self._draw(verts, sheet.texture, False, camera, show_depth, lights, cut, max_level)
 
     def draw(self, sheet: SpriteSheet, actors, camera, show_depth=False, lights=None):
         """Compatibilidad: ``actors`` como lista de (pies, suelo, alto, radio, fila, columna)."""

@@ -8,7 +8,8 @@ Controles: WASD/flechas: andar (sin personaje, mover la vista) · Espacio: salta
 arrastrar con el ratón: mover la vista (deja de seguir al personaje; F vuelve a seguirlo) ·
 rueda o +/-: zoom · PgUp/PgDn: planta más alta que se dibuja · C: cómo ocultar lo que hay
 encima del personaje (círculo, planta entera o nada) · L: iluminación sí/no · N: día/noche ·
-K: farol · T: tinte por altura · P: profundidad por píxel · Inicio: centrar · ESC: salir.
+K: farol · T: tinte por altura · P: profundidad por píxel · M: sin mapas de albedo y normales
+(diagnóstico de rendimiento) · Inicio: centrar · ESC: salir.
 """
 
 import argparse
@@ -22,7 +23,9 @@ from OpenGL.GL import GL_RGBA, GL_TRUE, GL_UNSIGNED_BYTE, glReadPixels
 from PIL import Image
 
 from engine.entities import BRAIN_NONE, BRAIN_WANDER, ActorTable, load_types
+from tmx_explorer import __version__
 from engine.entities.world_sim import PHYSICS_HZ, ActorSim
+from engine.render.gpu_timer import GpuTimer
 from engine.render.sprites import (
     ROWS_4, WALK_FPS, SpriteRenderer, SpriteSheet, delete_sheet, facing_index, facing_indices,
 )
@@ -73,6 +76,9 @@ class Viewer:
         self.table = ActorTable(self.types)
         self.sim = ActorSim(self.view, self.table, self.rng)
         self.sprites = SpriteRenderer(self.renderer.geo)
+        self.gpu_timer = GpuTimer()                       # tiempo de GPU por tramo (barra de título)
+        self.renderer.timer = self.sprites.timer = self.gpu_timer
+        self.cpu_ms = 0.0
         self.sheets = {}                                  # ruta -> SpriteSheet
         self.player_handle = None
         if player:
@@ -165,6 +171,8 @@ class Viewer:
                 self.set_night(not self.night)
             elif key == glfw.KEY_K:
                 self.lantern = not self.lantern
+            elif key == glfw.KEY_M:
+                r.use_material_maps = not r.use_material_maps
             elif key == glfw.KEY_F and self.player is not None:
                 self.follow = True
             elif key == glfw.KEY_SPACE and self.player is not None:
@@ -345,6 +353,12 @@ class Viewer:
         inside = (sx > left - margin) & (sx < right + margin) & (sy > top - margin) & (sy < bottom + margin)
         return rows[inside]
 
+    def timing_text(self) -> str:
+        """Tiempos del dibujo: GPU por tramo (mundo, sombras, personajes) y CPU de preparar el frame."""
+        g = self.gpu_timer.ms
+        parts = "+".join(f"{g.get(k, 0.0):.1f}" for k in ("mundo", "sombras", "personajes"))
+        return f"GPU {sum(g.values()):.1f} ms ({parts} mundo/sombras/personajes) · CPU dibujo {self.cpu_ms:.1f} ms"
+
     def screenshot(self, path):
         for _ in range(2):                    # el primer frame carga chunks y texturas
             self.frame()
@@ -361,7 +375,10 @@ class Viewer:
             dt, last = min(now - last, 0.1), now
             glfw.poll_events()
             self.update(dt)
+            t0 = time.perf_counter()
             self.frame()
+            self.cpu_ms = 0.9 * self.cpu_ms + 0.1 * (time.perf_counter() - t0) * 1000
+            self.gpu_timer.frame_done()
             glfw.swap_buffers(self.window)
             frames += 1
             if now - title_at > 0.5:
@@ -371,18 +388,21 @@ class Viewer:
                     X, Y, Z = self.player.pos
                     extra = f" · pies ({X:.1f}, {Y:.2f}, {Z:.1f}) m{'' if self.player.grounded else ' en el aire'}"
                 glfw.set_window_title(self.window,
-                    f"{self.world_path.name} · {frames / max(now - title_at, 1e-6):.0f} fps · "
+                    f"v{__version__} · {self.world_path.name} · {frames / max(now - title_at, 1e-6):.0f} fps · "
                     f"{len(self.table)} personajes ({'/'.join(map(str, self.sim.tier_counts))} cerca/medio/lejos), "
-                    f"simulación {self.sim_ms:.1f} ms · chunks {len(self.view.loaded)} · zoom {self.camera.zoom:.2f} · "
+                    f"simulación {self.sim_ms:.1f} ms · {self.timing_text()} · "
+                    f"chunks {len(self.view.loaded)} · zoom {self.camera.zoom:.2f} · "
                     f"planta máx {r.max_level}{extra} · ocultar encima: {CUT_MODES[self.cut_mode]}"
                     f"{' (activo)' if r.cut_level is not None else ''}"
                     f" · luz {'de noche' if self.night else 'de día'}{'' if r.lighting.enabled else ' (apagada)'}"
-                    f"{' · TINTE' if r.height_tint else ''}{' · PROFUNDIDAD' if r.show_depth else ''}")
+                    f"{' · TINTE' if r.height_tint else ''}{' · PROFUNDIDAD' if r.show_depth else ''}"
+                    f"{'' if r.use_material_maps else ' · SIN MAPAS'}")
                 title_at, frames = now, 0
 
     def close(self):
         for sheet in self.sheets.values():
             delete_sheet(sheet)
+        self.gpu_timer.delete()
         self.sprites.delete()
         self.renderer.delete()
         glfw.terminate()
