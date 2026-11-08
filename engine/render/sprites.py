@@ -15,10 +15,11 @@ from OpenGL.GL import (
     GL_ARRAY_BUFFER, GL_DYNAMIC_DRAW, GL_FALSE, GL_FLOAT, GL_FRAGMENT_SHADER, GL_TEXTURE0,
     GL_TEXTURE_2D, GL_TRIANGLES, GL_TRUE, GL_VERTEX_SHADER, glActiveTexture, glBindBuffer,
     glBindTexture, glBindVertexArray, glBufferData, glDeleteBuffers, glDeleteTextures,
-    glDeleteVertexArrays, glDepthMask, glDrawArrays, glEnableVertexAttribArray, glGenBuffers,
+    GL_GREATER, GL_LEQUAL, glDeleteVertexArrays, glDepthFunc, glDepthMask, glDrawArrays, glEnableVertexAttribArray, glGenBuffers,
     glGenVertexArrays, glGetUniformLocation, glUniform1f, glUniform1i, glUniform2f,
     glUniformMatrix4fv, glUseProgram, glVertexAttribPointer,
 )
+from OpenGL.GL import glUniform3f
 from OpenGL.GL.shaders import compileProgram, compileShader
 from PIL import Image
 
@@ -69,6 +70,8 @@ uniform float u_cut_level;         // ocultar lo que esté por encima de esta pl
 uniform vec2 u_cut_center;         // ...en este círculo (radio < 0: en todo el mapa)
 uniform float u_cut_radius;
 uniform float u_max_level;
+uniform vec3 u_silhouette_color;
+const float SILHOUETTE_ALPHA = 0.55;
 """ + LIGHTING_GLSL + FACADE_GLSL + """
 out vec4 frag;
 void main() {
@@ -89,7 +92,14 @@ void main() {
     } else {
         color = texture(u_sheet, v_uv);
         if (color.a < 0.01) discard;
-        color.rgb *= v_tint;
+        if (u_shadow == 2) {
+            // Silueta: lo que queda tapado del personaje (se dibuja con la prueba de profundidad
+            // invertida), en un color plano semitransparente
+            if (color.a < 0.5) discard;
+            color = vec4(u_silhouette_color, SILHOUETTE_ALPHA);
+        } else {
+            color.rgb *= v_tint;
+        }
     }
     float closeness = v_world.x * u_scale.x + v_world.y * u_scale.y + v_bias;
     float depth = clamp(1.0 - (closeness - u_closeness_range.x)
@@ -150,6 +160,9 @@ def facing_indices(dx, dz, previous, directions: int = 4, hysteresis_deg: float 
     return np.where(keep, previous, np.floor(angle / sector + 0.5).astype(int) % directions)
 
 
+SILHOUETTE_COLOR = (0.55, 0.85, 1.0)          # azul claro: se distingue sobre el escenario
+
+
 @dataclass
 class SpriteSheet:
     """Hoja de frames. La actual (4 × 4): filas abajo, izquierda, derecha, arriba; en cada fila un
@@ -198,7 +211,8 @@ class SpriteRenderer:
                                       compileShader(SPRITE_FRAGMENT, GL_FRAGMENT_SHADER))
         self.u = {k: glGetUniformLocation(self.program, k) for k in (
             "u_projection", "u_sheet", "u_shadow", "u_scale", "u_closeness_range", "u_show_depth",
-            "u_m_per_px", "u_cut_level", "u_cut_center", "u_cut_radius", "u_max_level", *LIGHT_UNIFORMS,
+            "u_m_per_px", "u_cut_level", "u_cut_center", "u_cut_radius", "u_max_level",
+            "u_silhouette_color", *LIGHT_UNIFORMS,
             *FACADE_UNIFORMS)}
         self.vao, self.vbo = glGenVertexArrays(1), glGenBuffers(1)
         glBindVertexArray(self.vao)
@@ -265,6 +279,7 @@ class SpriteRenderer:
         glUniformMatrix4fv(self.u["u_projection"], 1, GL_FALSE, camera.projection().T)
         glUniform1i(self.u["u_sheet"], 0)
         glUniform1i(self.u["u_shadow"], int(shadow))
+        glUniform3f(self.u["u_silhouette_color"], *SILHOUETTE_COLOR)
         glUniform2f(self.u["u_scale"], g.sz, g.sy)
         glUniform2f(self.u["u_closeness_range"], g.closeness_min, g.closeness_max)
         glUniform1i(self.u["u_show_depth"], int(show_depth))
@@ -313,6 +328,21 @@ class SpriteRenderer:
         verts = self.sprite_vertices(sheet, feet, body_h, rows, cols, tint, level)
         with timed("personajes"):
             self._draw(verts, sheet.texture, False, camera, show_depth, lights, cut, max_level)
+
+    def draw_silhouettes(self, sheet: SpriteSheet, feet, body_h, rows, cols, camera, lights=None,
+                         cut=None, max_level=1e9):
+        """Siluetas de los personajes donde algo los tapa: se dibujan después del resto, solo en
+        los píxeles en los que su profundidad queda detrás de lo ya dibujado."""
+        feet = np.asarray(feet, float).reshape(-1, 3)
+        if len(feet) == 0:
+            return
+        level = np.floor(feet[:, 1] / self.geo.cell_h + 1e-6)
+        verts = self.sprite_vertices(sheet, feet, body_h, rows, cols, np.ones((len(feet), 3)), level)
+        glDepthMask(GL_FALSE)
+        glDepthFunc(GL_GREATER)
+        self._draw(verts, sheet.texture, 2, camera, False, lights, cut, max_level)
+        glDepthFunc(GL_LEQUAL)
+        glDepthMask(GL_TRUE)
 
     def draw(self, sheet: SpriteSheet, actors, camera, show_depth=False, lights=None):
         """Compatibilidad: ``actors`` como lista de (pies, suelo, alto, radio, fila, columna)."""

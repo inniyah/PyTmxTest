@@ -87,7 +87,8 @@ def gl_viewer_factory():
         pytest.skip("no se puede crear una ventana OpenGL")
     glfw.destroy_window(probe)
     from engine.viewer import Viewer
-    yield Viewer
+    from tests.conftest import retrying_viewer
+    yield retrying_viewer(Viewer)
 
 
 @pytest.mark.parametrize("world,center", [("gallery", (9, 15)), ("gallery", (9, 33)),

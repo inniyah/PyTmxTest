@@ -125,7 +125,8 @@ def viewer_factory():
         pytest.skip("no se puede crear una ventana OpenGL")
     glfw.destroy_window(probe)
     from engine.viewer import Viewer
-    yield Viewer
+    from tests.conftest import retrying_viewer
+    yield retrying_viewer(Viewer)
 
 
 def _skin_pixels(path):
@@ -300,5 +301,83 @@ def test_facade_hides_npcs_upstairs_in_front(world, viewer_factory, tmp_path):
         def green(img):
             return int(((img[..., 1] > 150) & (img[..., 0] < 60) & (img[..., 2] < 60)).sum())
         assert green(_shot(v, tmp_path, "no")) > 100 and green(_shot(v, tmp_path, "fachada")) == 0
+    finally:
+        v.close()
+
+
+# --- Interior o exterior: agujeros, porches y balcones -------------------------------------
+
+@pytest.fixture(scope="module")
+def hole_world(tmp_path_factory, shared_tileset):
+    """Habitación cerrada x 2-6, y 2-5, con puerta al sur en x = 4 y techo salvo un agujero en
+    (4, 3); y un porche (techo sin paredes) en x 9-10, y 3-4."""
+    from tools.pieces.catalog import build_catalog
+    from tools.pieces.course import CourseBuilder
+    from tools.pieces.render import DEFAULT_PROJECTION
+    d = tmp_path_factory.mktemp("hole")
+    b = CourseBuilder(13, 9, build_catalog())
+    for y in range(9):
+        for x in range(13):
+            b.put(0, x, y, "floor_flat_000")
+    for x in range(2, 7):
+        b.put(0, x, 2, "wall_N")
+        if x != 4:
+            b.put(0, x, 5, "wall_S")
+    for y in range(2, 6):
+        b.put(0, 2, y, "wall_W")
+        b.put(0, 6, y, "wall_E")
+        for x in range(2, 7):
+            if (x, y) != (4, 3):
+                b.put(1, x, y, "floor_flat_000")
+    for y in (3, 4):
+        for x in (9, 10):
+            b.put(1, x, y, "floor_flat_000")
+    b.to_map(shared_tileset, d / "h.tmx", DEFAULT_PROJECTION).save(d / "h.tmx")
+    assert compile_tmx(d / "h.tmx", d / "h.cworld", nav=False).ok
+    return d / "h.cworld"
+
+
+def _interior(v, cx, cy, level=0):
+    v.player.pos = v._spawn_point((cx + 0.5, cy + 0.5), level)
+    return bool(v.room(cx, cy, level, float(v.player.pos[1]))[2].any())
+
+
+def test_interior_under_a_hole_and_not_under_a_porch(hole_world, viewer_factory):
+    v = viewer_factory(hole_world, 320, 200, visible=False, spawn=(3.5, 3.5), spawn_level=0)
+    try:
+        ys, xs = np.mgrid[3:4, 4:5]
+        assert not v.roofed_cells(xs, ys, 0.0)[0, 0]             # el agujero no tiene techo
+        assert _interior(v, 3, 3) and _interior(v, 4, 3) and _interior(v, 4, 5)
+        assert not _interior(v, 4, 7) and not _interior(v, 9, 3)  # fuera, y bajo el porche
+    finally:
+        v.close()
+
+
+def test_balcony_and_bridge_are_outdoors(world, viewer_factory):
+    v = viewer_factory(world, 320, 200, visible=False, spawn=(17.5, 4.5), spawn_level=0)
+    try:
+        assert _interior(v, 17, 4) and _interior(v, 17, 9)       # dentro del edificio
+        for cell in ((15, 10), (16, 10), (6, 8)):                 # bajo el balcón y bajo el puente
+            assert not _interior(v, *cell)
+            assert v.facade_cut_mask(*cell, 0, float(v.player.pos[1])) is None
+    finally:
+        v.close()
+
+
+def test_player_silhouette_behind_a_building(world, viewer_factory, tmp_path):
+    """Detrás del edificio, al aire libre, no se oculta nada: el jugador se ve como silueta (azul
+    claro sobre la pared), salvo con la silueta desactivada (tecla X)."""
+    from PIL import Image
+    v = viewer_factory(world, 560, 380, visible=False, spawn=(17.5, 1.5), spawn_level=0)
+    try:
+        v.renderer.lighting.enabled = False
+        v._center_on_player(1.0)
+        counts = []
+        for on in (False, True):
+            v.silhouette = on
+            v.screenshot(tmp_path / "s.png")
+            img = np.asarray(Image.open(tmp_path / "s.png").convert("RGB")).astype(int)
+            counts.append(int(((img[..., 2] > 200) & (img[..., 0] < 170) & (img[..., 1] > 170)).sum()))
+        assert counts[0] < 20 and counts[1] > 300
     finally:
         v.close()

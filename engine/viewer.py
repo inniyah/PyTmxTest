@@ -8,7 +8,7 @@ Controles: WASD/flechas: andar (sin personaje, mover la vista) · Espacio: salta
 arrastrar con el ratón: mover la vista (deja de seguir al personaje; F vuelve a seguirlo) ·
 rueda o +/-: zoom · PgUp/PgDn: planta más alta que se dibuja · C: cómo ocultar lo que tapa al
 personaje (fachada, círculo, planta entera o nada) · L: iluminación sí/no · N: día/noche ·
-K: farol · E: usar · T: tinte por altura · G: tinte por material del suelo · P: profundidad por píxel ·
+K: farol · E: usar · X: silueta del jugador · T: tinte por altura · G: tinte por material del suelo · P: profundidad por píxel ·
 M: sin mapas de albedo y normales
 (diagnóstico de rendimiento) · Inicio: centrar · ESC: salir.
 """
@@ -45,6 +45,9 @@ CUT_MODES = ("fachada", "círculo", "planta", "no")   # cómo se oculta lo que t
 FACADE_KEEP = 0.5            # m: zócalo que se conserva de lo que hay delante (paredes de su planta)
 MASK_HALF = 24               # la máscara de corte cubre 48 × 48 celdas alrededor del personaje
 MAX_ROOM_CELLS = 1200        # una "habitación" más grande que esto se corta ahí
+HOLE_SEARCH = 3              # celdas: bajo un agujero, hasta dónde se busca el techo de la habitación
+ROOM_OPEN_EDGES = 2          # una habitación puede tener tantos bordes abiertos (puertas) ...
+ROOM_OPEN_FRACTION = 0.25    # ... o esta fracción de su contorno; si no, no está cerrada: exterior
 STEP_UP = 1.6                # m: una celda sin techo junto a la habitación cuenta si su suelo está a
                              # menos de esto de los pies (un hueco de escalera)
 CUT_RADIUS_CELLS = 2.5
@@ -88,6 +91,7 @@ class Viewer:
         self.events = EventSystem.from_store(self.view.store, g.cell_w, g.cell_h) \
             if self.view.store.events() else None
         self.overlay = TextOverlay()
+        self.silhouette = True                 # silueta del jugador donde algo lo tapa (tecla X)
         self._use = False
         self.sim = ActorSim(self.view, self.table, self.rng, routines=self.routines)
         self.sprites = SpriteRenderer(self.renderer.geo)
@@ -227,6 +231,8 @@ class Viewer:
                 r.material_tint = not r.material_tint
             elif key == glfw.KEY_F and self.player is not None:
                 self.follow = True
+            elif key == glfw.KEY_X:
+                self.silhouette = not self.silhouette
             elif key == glfw.KEY_E:
                 self._use = True                       # usar (sucesos "use")
             elif key == glfw.KEY_SPACE and self.player is not None:
@@ -385,47 +391,87 @@ class Viewer:
         return region | (spans(region) & spans(region.T).T)
 
     def room(self, cx: int, cy: int, level: int, feet: float, half: int = MASK_HALF):
-        """Habitación del personaje: celdas con techo unidas a la suya sin cruzar paredes (ni
-        macizos). Devuelve (x0, y0, máscara booleana de (2·half) × (2·half)), vacía al aire libre."""
+        """Habitación del personaje, si está en un interior: (x0, y0, máscara booleana de
+        (2·half) × (2·half)); vacía al aire libre.
+
+        Celdas con techo unidas sin cruzar paredes (ni macizos), más las celdas sin techo de
+        dentro (huecos de escalera, agujeros del techo). Si su celda no tiene techo (está bajo
+        un agujero), se empieza por la celda con techo más cercana a la que se llega sin cruzar
+        paredes, y vale si su celda queda dentro. Solo es un interior si la región está cerrada:
+        como mucho ROOM_OPEN_EDGES bordes, o la fracción ROOM_OPEN_FRACTION de su contorno, dan
+        al exterior sin pared en medio (bajo un balcón o un puente, está abierta: exterior)."""
         v = self.view
         n = 2 * half
         x0, y0 = cx - half, cy - half
         ys, xs = np.mgrid[y0:y0 + n, x0:x0 + n]
-        inside = np.zeros((n, n), bool)
+        empty = np.zeros((n, n), bool)
         roofed = self.roofed_cells(xs, ys, feet)
-        if not roofed[half, half]:
-            return x0, y0, inside
         g, phys = self.renderer.geo, self.sim.physics
         floor_h = phys.support((xs.ravel() + 0.5) * g.cell_w, (ys.ravel() + 0.5) * g.cell_w,
                                np.full(xs.size, feet + 1.6)).reshape(xs.shape)
         cells = v.cells(xs, ys, level)
         wall_n, wall_w = C.wall_n(cells) != 0, C.wall_w(cells) != 0
         solid = C.fill(cells) == C.FILLS.index("solid")
-        todo = [(half, half)]
-        inside[half, half] = True
+        walkable = ~solid & (np.abs(floor_h - feet) < STEP_UP)
+
+        def neighbours(j, i):
+            """Vecinas a las que se pasa sin cruzar una pared: (fila, columna)."""
+            for dj, di, blocked in ((-1, 0, wall_n[j, i]), (0, -1, wall_w[j, i]),
+                                    (1, 0, wall_n[j + 1, i] if j + 1 < n else True),
+                                    (0, 1, wall_w[j, i + 1] if i + 1 < n else True)):
+                a, b = j + dj, i + di
+                if not blocked and 0 <= a < n and 0 <= b < n:
+                    yield a, b
+
+        # Por dónde empezar: su celda o, bajo un agujero, la celda con techo más cercana
+        seed = (half, half)
+        if not roofed[seed]:
+            seen, frontier, seed = {seed}, [seed], None
+            for _ in range(HOLE_SEARCH):
+                nxt = []
+                for c in frontier:
+                    for a in neighbours(*c):
+                        if a not in seen and walkable[a]:
+                            seen.add(a)
+                            nxt.append(a)
+                hits = [c for c in nxt if roofed[c]]
+                if hits:
+                    seed = hits[0]
+                    break
+                frontier = nxt
+            if seed is None:
+                return x0, y0, empty
+        inside = np.zeros((n, n), bool)
+        inside[seed] = True
+        todo = [seed]
         while todo and inside.sum() < MAX_ROOM_CELLS:
-            j, i = todo.pop()
-            for dj, di, blocked in ((-1, 0, wall_n[j, i]), (0, -1, wall_w[j, i]),
-                                    (1, 0, wall_n[j + 1, i] if j + 1 < n else True),
-                                    (0, 1, wall_w[j, i + 1] if i + 1 < n else True)):
-                a, b = j + dj, i + di
-                if blocked or not (0 <= a < n and 0 <= b < n) or inside[a, b] or solid[a, b] or not roofed[a, b]:
-                    continue
-                inside[a, b] = True
-                todo.append((a, b))
-        # Un paso más sin cruzar paredes, por celdas sin techo pero no macizas (un hueco de
-        # escalera dentro de la habitación); y los huecos que queden dentro
+            for a in neighbours(*todo.pop()):
+                if not inside[a] and not solid[a] and roofed[a]:
+                    inside[a] = True
+                    todo.append(a)
+        # Un paso más por celdas sin techo (un hueco de escalera dentro), y los huecos de dentro
         grown = inside.copy()
-        js, is_ = np.nonzero(inside)
-        for j, i in zip(js, is_):
+        for j, i in zip(*np.nonzero(inside)):
+            for a in neighbours(j, i):
+                if walkable[a] and not roofed[a]:
+                    grown[a] = True
+        region = self.fill_holes(grown)
+        if not region[half, half]:
+            return x0, y0, empty
+        # ¿Cerrada? Bordes del contorno que dan fuera sin pared en medio (a celdas transitables)
+        edges = opened = 0
+        for j, i in zip(*np.nonzero(region)):
             for dj, di, blocked in ((-1, 0, wall_n[j, i]), (0, -1, wall_w[j, i]),
                                     (1, 0, wall_n[j + 1, i] if j + 1 < n else True),
                                     (0, 1, wall_w[j, i + 1] if i + 1 < n else True)):
                 a, b = j + dj, i + di
-                if not blocked and 0 <= a < n and 0 <= b < n and not solid[a, b] and not roofed[a, b] \
-                        and abs(floor_h[a, b] - feet) < STEP_UP:
-                    grown[a, b] = True
-        return x0, y0, self.fill_holes(grown)
+                if 0 <= a < n and 0 <= b < n and region[a, b]:
+                    continue
+                edges += 1
+                opened += (not blocked and 0 <= a < n and 0 <= b < n and walkable[a, b])
+        if opened > max(ROOM_OPEN_EDGES, ROOM_OPEN_FRACTION * edges):
+            return x0, y0, empty
+        return x0, y0, region
 
     def facade_cut_mask(self, cx: int, cy: int, level: int, feet: float):
         """Máscara de corte, o None si no hay nada que ocultar: dict(origin, mask, base, floor,
@@ -529,7 +575,19 @@ class Viewer:
                 sheet, t.pos[sel], t.support[sel], t.height[sel], t.radius[sel],
                 np.array([ROWS_4[int(f)] for f in t.facing[sel]]), sheet.walk_cols(t.anim_time[sel], WALK_FPS),
                 t.tint[sel], self.camera, r.show_depth, lights=r, cut=cut, max_level=r.max_level)
+        self.draw_player_silhouette(cut)
         self.draw_messages()
+
+    def draw_player_silhouette(self, cut):
+        """Silueta del jugador donde algo lo tapa (al aire libre no se oculta nada del escenario)."""
+        if not self.silhouette or self.player is None or self.renderer.show_depth:
+            return
+        t, row = self.table, self.table.row(self.player_handle)
+        sheet = self.sheet(self.types[t.type_names[t.type[row]]].sheet)
+        self.sprites.draw_silhouettes(
+            sheet, t.pos[row:row + 1], t.height[row:row + 1], np.array([ROWS_4[int(t.facing[row])]]),
+            sheet.walk_cols(t.anim_time[row:row + 1], WALK_FPS), self.camera, lights=self.renderer,
+            cut=cut, max_level=self.renderer.max_level)
 
     def visible_actors(self):
         """Filas de los personajes cuyo sprite puede verse (con margen para el más alto)."""

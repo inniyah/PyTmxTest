@@ -84,6 +84,7 @@ python -m engine.viewer MUNDO.cworld [opciones]
 | N | Día / noche |
 | K | Farol del personaje |
 | E | Usar (sucesos con `when = use`) |
+| X | Silueta del jugador donde algo lo tapa |
 | T | Tinte por altura |
 | G | Tinte por material del suelo |
 | P | Ver la profundidad por píxel |
@@ -105,13 +106,18 @@ python -m engine.viewer MUNDO.cworld [opciones]
 | `--size W H` | Tamaño de la ventana |
 | `--screenshot F.png` | Dibujar, guardar una captura y salir (con `--walk DX DZ S` o `--simulate S` antes) |
 
-**Ocultar lo que tapa al personaje.** Solo en interiores (con algo sólido por encima del
-personaje); al aire libre nunca se oculta nada, aunque esté detrás de un edificio. Por defecto,
-como una casa de muñecas (modo *fachada*): se calcula su habitación (las celdas con techo unidas
-a la suya sin cruzar paredes, con los huecos de escalera) y se ocultan su techo y las plantas de
-arriba, salvo la pared del fondo, que se ve entera; la pared de delante queda en un zócalo.
-Sirve igual para mapas horizontales y para edificios de varias plantas. Los modos *círculo* y
-*planta* ocultan todo lo que hay por encima de su planta, en un círculo o en todo el mapa.
+**Ocultar lo que tapa al personaje.** Solo en interiores; al aire libre nunca se oculta nada.
+Un interior es una habitación **cerrada**: las celdas con techo unidas a la del personaje sin
+cruzar paredes (con los huecos de escalera y los agujeros del techo, así que bajo un agujero se
+sigue dentro), con como mucho un par de bordes, o un cuarto de su contorno, abiertos al exterior
+sin pared (las puertas). Bajo un balcón, un porche o un puente, la región está abierta: es
+exterior. En un interior, por defecto como una casa de muñecas (modo *fachada*), se ocultan el
+techo y las plantas de arriba de la habitación, salvo la pared del fondo, que se ve entera; la
+pared de delante queda en un zócalo. Los modos *círculo* y *planta* ocultan todo lo que hay por
+encima de su planta, en un círculo o en todo el mapa.
+
+**Silueta.** Donde algo tapa al jugador (detrás de una casa, por ejemplo), se dibuja su silueta
+en azul claro a través de lo que lo tapa (tecla X para quitarla).
 
 La barra de título muestra la versión, los fps, los personajes por zona de detalle
 (cerca/medio/lejos), el estado de las rutinas, y los tiempos: simulación, **GPU** por tramo
