@@ -21,3 +21,6 @@ Thumbs.db
 
 # Mundos compilados (se regeneran con python -m engine.compiler)
 *.cworld
+
+# Directorios temporales
+tmp/

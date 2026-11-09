@@ -114,3 +114,15 @@ def test_sprite_sheet_surface_makes_it_glow(viewer, tmp_path):
     h, w = plain.shape[:2]
     box = (slice(h // 2 - 60, h // 2 + 20), slice(w // 2 - 25, w // 2 + 25))   # el personaje
     assert glowing[box].sum(-1).max() > plain[box].sum(-1).max() + 60
+
+
+def test_halo_only_when_something_glows_in_view(viewer, tmp_path):
+    """El halo (una pasada más) solo se calcula si hay a la vista algún chunk con brillo propio."""
+    v = viewer((5.5, 16.5))
+    _shot(v, tmp_path, "a")
+    assert v.halo_active                                   # el suelo de líneas, a la vista
+    v.player.pos = v._spawn_point((17.5, 6.5), 0)          # dentro del edificio
+    v.camera.zoom = 3.0
+    v._center_on_player(1.0)
+    _shot(v, tmp_path, "b")
+    assert not v.halo_active

@@ -72,6 +72,9 @@ class Projection:
 DEFAULT_PROJECTION = Projection()
 
 
+SMOOTH_ID = 1_000_000            # identificador de contorno de las caras de un grupo de suavizado
+
+
 def render(faces: List[Tuple[np.ndarray, Tuple[float, float, float]]], proj: Projection = DEFAULT_PROJECTION,
            with_albedo: bool = False, outline: bool = True):
     """Devuelve (color uint8 (h, w, 4), normal uint8 (h, w, 4), posición uint16 (h, w, 4)) y,
@@ -87,7 +90,11 @@ def render(faces: List[Tuple[np.ndarray, Tuple[float, float, float]]], proj: Pro
     # Centros de píxel en coordenadas de pantalla con y hacia arriba
     gx, gy = np.meshgrid(np.arange(w) + 0.5, h - (np.arange(h) + 0.5))
 
-    for fid, (points, kd) in enumerate(faces):
+    for fid, face in enumerate(faces):
+        points, kd = face[0], face[1]
+        vertex_normals = face[2] if len(face) > 2 else None    # superficie curva: se interpola
+        group = face[3] if len(face) > 3 else 0
+        surface_id = SMOOTH_ID + group if (vertex_normals is not None and group) else fid
         n = newell_normal(points)                      # robusta aunque haya vértices alineados
         if np.linalg.norm(n) < 1e-12:
             continue
@@ -117,10 +124,18 @@ def render(faces: List[Tuple[np.ndarray, Tuple[float, float, float]]], proj: Pro
             near = proj.closeness(p3.reshape(-1, 3)).reshape(px.shape)
             win = inside & (near > depth[j0:j1, i0:i1] + 1e-9)
             depth[j0:j1, i0:i1][win] = near[win]
-            face_id[j0:j1, i0:i1][win] = fid
-            color[j0:j1, i0:i1][win] = shade
+            face_id[j0:j1, i0:i1][win] = surface_id      # una superficie curva: un solo contorno
+            if vertex_normals is not None:
+                vn = vertex_normals[[0, k, k + 1]]
+                pn = l0[..., None] * vn[0] + l1[..., None] * vn[1] + l2[..., None] * vn[2]
+                pn /= np.maximum(np.linalg.norm(pn, axis=-1, keepdims=True), 1e-9)
+                lit = AMBIENT + (1 - AMBIENT) * np.maximum(0.0, pn @ LIGHT)
+                color[j0:j1, i0:i1][win] = (np.asarray(kd) * lit[..., None])[win]
+                normal[j0:j1, i0:i1][win] = pn[win]
+            else:
+                color[j0:j1, i0:i1][win] = shade
+                normal[j0:j1, i0:i1][win] = n
             albedo[j0:j1, i0:i1][win] = kd
-            normal[j0:j1, i0:i1][win] = n
             position[j0:j1, i0:i1][win] = p3[win]
 
     covered = face_id >= 0

@@ -95,6 +95,7 @@ class Viewer:
         self.silhouette = True                 # silueta del jugador donde algo lo tapa (tecla X)
         self.bloom = Bloom()
         self.halo = True                       # halo del brillo propio (tecla H)
+        self.halo_active = False
         self.clock = 0.0
         self._use = False
         self.sim = ActorSim(self.view, self.table, self.rng, routines=self.routines)
@@ -566,7 +567,9 @@ class Viewer:
         propio), el halo, y encima los mensajes."""
         r = self.renderer
         w, h = glfw.get_framebuffer_size(self.window)
-        halo = self.halo and r.has_glow and not r.show_depth
+        sprite_glow = any(sh.surface for sh in self.sheets.values())
+        halo = self.halo and not r.show_depth and (sprite_glow or (r.has_glow and r.glow_visible(self.camera)))
+        self.halo_active = halo                  # sin nada que brille a la vista, ni se calcula
         if halo:
             self.bloom.begin(w, h)
             r.glow_buffer = True

@@ -137,3 +137,31 @@ def test_every_face_has_a_valid_outward_normal(piece):
         single_prism = len(piece.spec.walls) <= 1                 # las esquinas son dos prismas
         if len(mesh.faces) > 1 and single_prism:                 # hacia fuera del prisma
             assert np.dot(n, f.points.mean(axis=0) - center) > 0
+
+
+def test_pipe_is_smooth_in_the_obj_and_in_the_tile(tmp_path):
+    """El tubo es una superficie curva: en el .obj, grupo de suavizado y una normal por vértice
+    (como lo exportaría Blender); al dibujarlo, la normal se interpola dentro de cada cara y no
+    hay contorno entre sus caras (sin barras verticales), solo en la silueta."""
+    from tools.pieces.objio import read_obj, write_mtl, write_obj
+    from tools.pieces.render import DEFAULT_PROJECTION, render
+    piece = next(p for p in CATALOG if p.name == "pipe_copper")
+    write_mtl(tmp_path / "pieces.mtl")
+    write_obj(tmp_path / "pipe.obj", piece.mesh(DEFAULT_CELL), "pipe")
+    text = (tmp_path / "pipe.obj").read_text()
+    assert "s 1" in text and "s off" in text
+    faces = read_obj(tmp_path / "pipe.obj")
+    sides = [f for f in faces if f[2] is not None]
+    assert len(sides) == 20 and all(f[3] == 1 for f in sides)
+    assert sum(f[2] is None for f in faces) == 2                    # las tapas, planas
+    color, normal, _pos = render(faces, DEFAULT_PROJECTION)
+    covered = color[..., 3] > 0
+    rows = np.nonzero(covered.any(axis=1))[0]
+    row = rows[len(rows) * 2 // 3]                                  # una fila a media altura del tubo
+    cols = np.nonzero(covered[row])[0][2:-2]                        # sin la silueta
+    nx = normal[row, cols, 0].astype(int)
+    assert len(set(nx.tolist())) > len(cols) // 2                   # cambia casi en cada píxel
+    assert np.abs(np.diff(nx)).max() <= 12                          # sin saltos de cara a cara
+    lum = color[row, cols, :3].astype(int).sum(-1)
+    dips = (lum[1:-1] < lum[:-2] - 20) & (lum[1:-1] < lum[2:] - 20)
+    assert not dips.any()                                           # sin líneas oscuras por dentro

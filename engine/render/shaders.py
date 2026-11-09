@@ -72,6 +72,28 @@ float ggx_term(vec3 n, vec3 l, vec3 v, float rough) {
     return 3.14159 * D * G / max(4.0 * nl * nv, 1e-4) * nl;          // en las unidades de la difusa
 }
 vec3 fresnel(vec3 f0, float cos_t) { return f0 + (1.0 - f0) * pow(1.0 - clamp(cos_t, 0.0, 1.0), 5.0); }
+// Luz difusa y reflejos en un solo recorrido de las luces (devuelve la difusa; los reflejos en
+// ``spec``): con capa de superficie no se paga el bucle dos veces
+vec3 light_and_specular(vec3 world, vec3 n, float wrap, vec3 v, float rough, vec3 f0, out vec3 spec) {
+    vec3 light = mix(u_ground, u_sky, n.y * 0.5 + 0.5);
+    light += u_sun_color * max((dot(n, u_sun_dir) + wrap) / (1.0 + wrap), 0.0);
+    spec = u_sun_color * ggx_term(n, u_sun_dir, v, rough) * fresnel(f0, dot(normalize(u_sun_dir + v), v));
+    for (int k = 0; k < u_num_lights; k++) {
+        int i = (u_use_list == 1) ? u_light_list[k] : k;
+        vec4 p = texelFetch(u_lights, ivec2(0, i), 0);
+        vec3 d = p.xyz - world;
+        float dist = length(d);
+        float r = p.w;
+        if (dist < r) {
+            float q = 1.0 - (dist * dist) / (r * r);
+            vec3 l = d / max(dist, 1e-4);
+            vec3 c = u_lamps * texelFetch(u_lights, ivec2(1, i), 0).rgb * q * q;
+            light += c * max((dot(n, l) + wrap) / (1.0 + wrap), 0.0);
+            spec += c * ggx_term(n, l, v, rough) * fresnel(f0, dot(normalize(l + v), v));
+        }
+    }
+    return light;
+}
 vec3 specular_at(vec3 world, vec3 n, vec3 v, float rough, vec3 f0) {
     vec3 spec = u_sun_color * ggx_term(n, u_sun_dir, v, rough) * fresnel(f0, dot(normalize(u_sun_dir + v), v));
     for (int k = 0; k < u_num_lights; k++) {
@@ -266,12 +288,14 @@ void main() {
             base = mix(base, u_material_colors[v_material], 0.75);
         vec3 lin = to_linear(base);
         vec3 world = v_origin + local;
-        if (u_has_surface == 1) {
-            vec4 surf = texelFetch(u_surface, texel_lod, lod);
+        vec4 surf = (u_has_surface == 1) ? texelFetch(u_surface, texel_lod, lod) : vec4(0.0, 1.0, 0.0, 0.0);
+        if (surf.r > 0.5 / 255.0 || surf.g < 254.5 / 255.0 || surf.b > 0.5 / 255.0) {
+            // Metal, pulido o brillo: el cálculo completo (lo mate va por el de siempre)
             float metal = surf.r, rough = max(surf.g, 0.05);
             vec3 f0 = mix(vec3(0.04), lin, metal);
-            vec3 lit = lin * (1.0 - metal * (1.0 - METAL_DIFFUSE)) * light_at(world, n, 0.0)
-                       + specular_at(world, n, u_view_dir, rough, f0)
+            vec3 spec;
+            vec3 light = light_and_specular(world, n, 0.0, u_view_dir, rough, f0, spec);
+            vec3 lit = lin * (1.0 - metal * (1.0 - METAL_DIFFUSE)) * light + spec
                        + sky_reflection(n, u_view_dir, rough, f0);
             vec3 emitted = lin * surf.b * pulse(surf.a) * u_glow_strength;
             rgb = to_srgb(lit + emitted);

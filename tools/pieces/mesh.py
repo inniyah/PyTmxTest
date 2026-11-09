@@ -75,6 +75,8 @@ def _dedupe(points: np.ndarray, eps: float = 1e-9) -> np.ndarray:
 class Face:
     points: np.ndarray        # (n, 3) en metros, en orden con la normal hacia fuera
     material: str
+    normals: np.ndarray = None    # (n, 3) normales por vértice (superficie curva) o None (plana)
+    smooth: int = 0               # grupo de suavizado: las caras de un grupo son una sola superficie
 
 
 @dataclass
@@ -174,7 +176,16 @@ def pipe_mesh(material: str, size: CellSize = DEFAULT_CELL, radius: float = 0.12
     celda): un prisma sobre un polígono de ``sides`` lados, para que tenga brillos que varíen."""
     ring = [(0.5 + radius * np.cos(a), 0.5 + radius * np.sin(a))
             for a in np.linspace(0, -2 * np.pi, sides, endpoint=False)]        # antihorario visto desde arriba
-    return Mesh(_orient_outwards(_prism(ring, _const(0.0), _const(1.0), material, size)))
+    faces = []
+    center = np.array([0.5 * size.width, 0.0, 0.5 * size.width])
+    for f in _orient_outwards(_prism(ring, _const(0.0), _const(1.0), material, size)):
+        if abs(newell_normal(f.points)[1]) < 1e-9:              # lateral: superficie curva
+            radial = f.points - center
+            radial[:, 1] = 0.0
+            radial /= np.linalg.norm(radial, axis=1, keepdims=True)
+            f = Face(f.points, f.material, normals=radial, smooth=1)
+        faces.append(f)
+    return Mesh(faces)
 
 
 def recolored(mesh: Mesh, material: str) -> Mesh:

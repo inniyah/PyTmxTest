@@ -183,6 +183,17 @@ vez; un degradado a lo largo de una línea hace que la luz la recorra (la energ�
 unas flechas que se encienden una tras otra). Basta con que tenga la capa algún tileset: los
 tiles sin ella son mates, sin metal ni brillo, y se ven como siempre.
 
+En las superficies curvas (tubos, columnas, cúpulas), el **mapa de normales** debe llevar la
+curvatura suave, como sale de un modelo con normales suavizadas: si cada cara tiene su normal
+plana, el reflejo va a escalones y la pieza se ve a barras. El generador de piezas de prueba lo
+hace así: el tubo se exporta con grupo de suavizado y una normal por vértice, como lo exportaría
+Blender, y al dibujarlo se interpola la normal y solo lleva contorno en la silueta.
+
+Coste: los píxeles mates, sin metal ni brillo, se calculan como si no hubiera capa; los demás
+recorren las luces una sola vez para la luz difusa y los reflejos. El halo solo se calcula
+cuando hay a la vista algún tile (o sprite) con brillo propio, y se difumina a 1/4 y 1/8 de
+resolución.
+
 Los **sprites** pueden llevar la misma capa en un archivo junto a su hoja, `hoja.s.png` (ojos que
 brillan, armaduras metálicas). Las piezas de prueba incluyen tubos de cobre y de acero, un suelo
 pulido y un suelo con líneas que brillan y laten (en `maps/levels`).

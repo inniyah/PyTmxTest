@@ -123,9 +123,15 @@ void main() {
             vec4 surf = texture(u_sheet_surface, v_uv);
             float metal = surf.r, rough = max(surf.g, 0.05);
             vec3 f0 = mix(vec3(0.04), lin, metal);
-            vec3 lit = lin * (1.0 - metal * (1.0 - METAL_DIFFUSE)) * light_at(world, n, 0.6);
-            if (metal > 0.0 || rough < 0.999)
-                lit += specular_at(world, n, u_view_dir, rough, f0) + sky_reflection(n, u_view_dir, rough, f0);
+            vec3 lit;
+            if (metal > 0.5 / 255.0 || rough < 254.5 / 255.0) {
+                vec3 spec;
+                vec3 light = light_and_specular(world, n, 0.6, u_view_dir, rough, f0, spec);
+                lit = lin * (1.0 - metal * (1.0 - METAL_DIFFUSE)) * light + spec
+                      + sky_reflection(n, u_view_dir, rough, f0);
+            } else {
+                lit = lin * light_at(world, n, 0.6);
+            }
             color.rgb = to_srgb(lit + emitted);
         } else {
             color.rgb = to_srgb(lin * light_at(world, n, 0.6));

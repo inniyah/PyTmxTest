@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from typing import Dict, Tuple
 
 import numpy as np
+
+from engine.world import visual as V
 from OpenGL.GL import (
     GL_ARRAY_BUFFER, GL_BLEND, GL_CLAMP_TO_EDGE, GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT,
     GL_DEPTH_TEST, GL_ELEMENT_ARRAY_BUFFER, GL_FALSE, GL_FLOAT, GL_FRAGMENT_SHADER, GL_LEQUAL,
@@ -214,6 +216,9 @@ class GpuAtlas:
 
     def __init__(self, store, layout: AtlasLayout):
         self.color, self.position, self.albedo, self.normal, self.surface = {}, {}, {}, {}, {}
+        regions = store.atlas_regions()
+        # Regiones con brillo propio (canal B de la superficie): para saber si hace falta el halo
+        self.emissive = np.zeros(max([0] + [int(r[0]) for r in regions]) + 1, bool)
         borders = [int(r[6]) for r in store.atlas_regions()] or [1]
         self.levels = min(MAX_MIP_LEVELS, int(np.floor(np.log2(max(1, min(borders))))))
         for page in layout.page_sizes:
@@ -229,6 +234,10 @@ class GpuAtlas:
                 if raw is not None:
                     with Image.open(io.BytesIO(raw)) as im:
                         maps[kind] = np.asarray(im.convert("RGBA"))
+            if "surface" in maps:
+                for rid, rpage, x, y, w, h, _b in regions:
+                    if rpage == page and maps["surface"][y:y + h, x:x + w, 2].any():
+                        self.emissive[rid] = True
             chains = mip_chains(maps, self.levels)
             self.color[page] = _texture(chains["color"], False)
             self.position[page] = _texture(maps["position"], True)          # siempre completo
@@ -244,8 +253,11 @@ class GpuAtlas:
 class ChunkMesh:
     """Mallas de un chunk en la GPU, una por página del atlas."""
 
-    def __init__(self, quads: Dict[int, np.ndarray]):
+    def __init__(self, quads: Dict[int, np.ndarray], emissive=None):
         self.parts = []                                   # (página, vao, vbo, ebo, índices)
+        # Rectángulos (izquierda, arriba, derecha, abajo; píxeles de mundo) de sus tiles con brillo
+        # propio: para saber si hace falta el halo
+        self.emissive = np.zeros((0, 4)) if emissive is None else emissive
         for page, verts in quads.items():
             n = len(verts) // 4
             vao, vbo, ebo = glGenVertexArrays(1), glGenBuffers(1), glGenBuffers(1)
@@ -348,7 +360,8 @@ class WorldRenderer:
         for key in visible:
             if key not in self.meshes:
                 chunk = self.view.chunk(*key)
-                self.meshes[key] = ChunkMesh(chunk_quads(chunk, self.geo, self.layout) if chunk else {})
+                self.meshes[key] = ChunkMesh(chunk_quads(chunk, self.geo, self.layout) if chunk else {},
+                                             self._emissive_rects(chunk))
         if visible:                                       # liberar mallas lejanas
             xs, ys = [k[0] for k in visible], [k[1] for k in visible]
             for key in [k for k in self.meshes if not (min(xs) - keep_margin <= k[0] <= max(xs) + keep_margin
@@ -497,6 +510,45 @@ class WorldRenderer:
                        "floor": int(level if floor is None else floor),
                        "feet": float(feet), "keep": float(keep), "cell_w": g.cell_w}
         self.facade = self.facade_state
+
+    def _emissive_rects(self, chunk):
+        """Rectángulos de pantalla (píxeles de mundo) de los tiles del chunk con brillo propio."""
+        if chunk is None or not self.atlas.emissive.any():
+            return None
+        n, g = chunk.size, self.geo
+        lens = chunk.col_len.astype(np.int64)
+        col = np.repeat(np.arange(n * n), lens)
+        if col.size == 0:
+            return None
+        level = chunk.col_start.astype(np.int64)[col] + (np.arange(col.size) - chunk.offset[col])
+        cell, slot = np.nonzero(V.region(chunk.visual))
+        rid = V.region(chunk.visual[cell, slot]).astype(np.int64)
+        glow = (rid < len(self.atlas.emissive)) & self.atlas.emissive[np.minimum(rid, len(self.atlas.emissive) - 1)]
+        if not glow.any():
+            return None
+        cell, rid = cell[glow], rid[glow]
+        x = chunk.cx * n + (col[cell] % n)
+        y = chunk.cy * n + (col[cell] // n)
+        lv = level[cell]
+        w, h = self.layout.w[rid].astype(float), self.layout.h[rid].astype(float)
+        left = x * g.tile_w
+        top = (y + 1) * g.row_h - h - lv * g.level_h
+        return np.stack([left, top, left + w, top + h], axis=1)
+
+    def glow_visible(self, camera: Camera, margin_px: float = 48.0) -> bool:
+        """¿Hay a la vista (con un margen para el halo) algún tile con brillo propio? Tile a tile:
+        un mapa pequeño cabe en un solo chunk. Los chunks sin malla aún cuentan en el frame
+        siguiente."""
+        left, top, right, bottom = camera.bounds()
+        m = margin_px / camera.zoom
+        for k in self.visible_chunks(camera):
+            mesh = self.meshes.get(k)
+            if mesh is None or len(mesh.emissive) == 0:
+                continue
+            r = mesh.emissive
+            if ((r[:, 2] > left - m) & (r[:, 0] < right + m) & (r[:, 3] > top - m) & (r[:, 1] < bottom + m)).any():
+                return True
+        return False
 
     @property
     def has_glow(self) -> bool:

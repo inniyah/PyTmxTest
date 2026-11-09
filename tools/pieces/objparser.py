@@ -370,7 +370,7 @@ def load_model(file):
             objdata.groups.append(curr_group)
 
         if cmd_id == 's' and nb_parts > 1:
-            curr_smooth = int(parts[1])
+            curr_smooth = 0 if parts[1].lower() == "off" else int(parts[1])     # "s off" = sin suavizado
         elif cmd_id == 'v' and nb_parts > 1:
             objdata.v_list.append(parse_vertex(parts[1:]))
         elif cmd_id == 'vt' and nb_parts > 1:

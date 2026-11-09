@@ -1,13 +1,14 @@
 """Halo del brillo propio: la escena se dibuja en una imagen intermedia con dos salidas (color y
-brillo); el brillo se reduce a la mitad y a la cuarta parte, se difumina (gaussiano separable) y
-se suma al color al pasar a la pantalla. A media y cuarta resolución, el difuminado es barato y el
-halo se extiende lejos sin muchas muestras.
+brillo); el brillo se reduce a 1/2, 1/4 y 1/8, se difumina (gaussiano separable) a 1/4 y 1/8, y se
+suma al color al pasar a la pantalla. Con tan poca resolución el difuminado es barato y el halo se
+extiende lejos con pocas muestras. El brillo se guarda en R11G11B10 (la mitad que RGBA16F).
 """
 
 from OpenGL.GL import (
     GL_CLAMP_TO_EDGE, GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_DEPTH_ATTACHMENT,
     GL_DEPTH_COMPONENT24, GL_DEPTH_TEST, GL_FLOAT, GL_FRAGMENT_SHADER, GL_FRAMEBUFFER,
-    GL_FRAMEBUFFER_COMPLETE, GL_LINEAR, GL_NEAREST, GL_RENDERBUFFER, GL_RGBA, GL_RGBA8, GL_RGBA16F,
+    GL_FRAMEBUFFER_COMPLETE, GL_LINEAR, GL_NEAREST, GL_R11F_G11F_B10F, GL_RENDERBUFFER, GL_RGB, GL_RGBA,
+    GL_RGBA8,
     GL_TEXTURE0, GL_TEXTURE1, GL_TEXTURE2, GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_TEXTURE_MIN_FILTER,
     GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T, GL_TRIANGLES, GL_UNSIGNED_BYTE, GL_VERTEX_SHADER, GL_BLEND,
     glActiveTexture, glBindFramebuffer, glBindRenderbuffer, glBindTexture, glBindVertexArray,
@@ -60,6 +61,8 @@ void main() {
 }
 """
 BLUR_PASSES = 2
+LEVELS = (2, 4, 8)          # reducciones; se difumina a 1/4 y 1/8 (a 1/2 solo se reduce, de paso)
+BLURRED = (4, 8)
 STRENGTH = 1.0
 
 
@@ -107,7 +110,7 @@ class Bloom:
         self._release()
         self.size = (w, h)
         self.scene = _tex(w, h, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, False)
-        self.glow = _tex(w, h, GL_RGBA16F, GL_RGBA, GL_FLOAT, True)
+        self.glow = _tex(w, h, GL_R11F_G11F_B10F, GL_RGB, GL_FLOAT, True)      # la mitad que RGBA16F
         self.scene_fbo = _fbo(self.scene, self.glow)
         self.depth = glGenRenderbuffers(1)
         glBindRenderbuffer(GL_RENDERBUFFER, self.depth)
@@ -116,10 +119,10 @@ class Bloom:
         if glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE:
             raise RuntimeError("No se pudo crear la imagen intermedia del halo")
         self.levels = []
-        for div in (2, 4):
+        for div in LEVELS:
             lw, lh = max(1, w // div), max(1, h // div)
-            a = _tex(lw, lh, GL_RGBA16F, GL_RGBA, GL_FLOAT, True)
-            b = _tex(lw, lh, GL_RGBA16F, GL_RGBA, GL_FLOAT, True)
+            a = _tex(lw, lh, GL_R11F_G11F_B10F, GL_RGB, GL_FLOAT, True)
+            b = _tex(lw, lh, GL_R11F_G11F_B10F, GL_RGB, GL_FLOAT, True)
             self.levels.append((lw, lh, a, b, _fbo(a), _fbo(b)))
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
         self.textures = [self.scene, self.glow] + [t for lv in self.levels for t in lv[2:4]]
@@ -148,17 +151,18 @@ class Bloom:
         self.u_step = glGetUniformLocation(self.blur, "u_step")
         glUniform1i(glGetUniformLocation(self.blur, "u_src"), 0)
         src = self.glow
-        for lw, lh, a, b, fa, fb in self.levels:
+        for (lw, lh, a, b, fa, fb), div in zip(self.levels, LEVELS):
             self._pass(src, fa, (lw, lh), (0.0, 0.0))                  # reducir (filtro lineal)
-            for _ in range(BLUR_PASSES):
-                self._pass(a, fb, (lw, lh), (1.0 / lw, 0.0))
-                self._pass(b, fa, (lw, lh), (0.0, 1.0 / lh))
+            if div in BLURRED:
+                for _ in range(BLUR_PASSES):
+                    self._pass(a, fb, (lw, lh), (1.0 / lw, 0.0))
+                    self._pass(b, fa, (lw, lh), (0.0, 1.0 / lh))
             src = a
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
         glViewport(0, 0, w, h)
         glUseProgram(self.composite)
-        for unit, (name, tex) in enumerate((("u_scene", self.scene), ("u_half", self.levels[0][2]),
-                                            ("u_quarter", self.levels[1][2]))):
+        for unit, (name, tex) in enumerate((("u_scene", self.scene), ("u_half", self.levels[1][2]),
+                                            ("u_quarter", self.levels[2][2]))):
             glActiveTexture((GL_TEXTURE0, GL_TEXTURE1, GL_TEXTURE2)[unit])
             glBindTexture(GL_TEXTURE_2D, tex)
             glUniform1i(glGetUniformLocation(self.composite, name), unit)
