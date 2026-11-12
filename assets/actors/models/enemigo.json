@@ -1,0 +1,62 @@
+{
+  "_comentario": "Soldado enemigo: el mismo cuerpo que 'soldado', con otro uniforme y sin mochila. Ver maniqui.json y soldado.json para el formato.",
+  "altura": 1.75,
+  "proporciones": {
+    "cabeza": 0.62,
+    "piernas": 1.3,
+    "brazos": 1.15
+  },
+  "materiales": {
+    "piel": {
+      "luz": "#f2c9a0",
+      "sombra": "#c99a74"
+    },
+    "uniforme": {
+      "luz": "#a39a7c",
+      "sombra": "#7a7259"
+    },
+    "casco": {
+      "luz": "#7c7a70",
+      "sombra": "#5a5850"
+    },
+    "botas": {
+      "luz": "#3a332c",
+      "sombra": "#26211c"
+    },
+    "fusil": {
+      "luz": "#55585c",
+      "sombra": "#36383b",
+      "metal": 0.8,
+      "rugosidad": 0.45
+    }
+  },
+  "contorno": "#2b2418",
+  "ojos": "#2b2418",
+  "partes": {
+    "cabeza": "piel",
+    "oreja_d": "piel",
+    "oreja_i": "piel",
+    "mano_d": "piel",
+    "mano_i": "piel",
+    "torso": "uniforme",
+    "brazo_d": "uniforme",
+    "brazo_i": "uniforme",
+    "pierna_d": "uniforme",
+    "pierna_i": "uniforme",
+    "bota_d": "botas",
+    "bota_i": "botas",
+    "casco": "casco",
+    "fusil": "fusil"
+  },
+  "equipo": [
+    "casco",
+    "fusil"
+  ],
+  "animaciones": [
+    "andar",
+    "agachado",
+    "andar_agachado",
+    "granada",
+    "morir"
+  ]
+}

@@ -1,0 +1,96 @@
+{
+  "_comentario": "Generado por tools.actors: no editar a mano. Pies en 'anchor' (píxeles del fotograma); 'px_per_m' = píxeles por metro en horizontal; filas = direcciones desde el este en sentido horario.",
+  "frame": [
+    230,
+    139
+  ],
+  "cols": 17,
+  "rows": 8,
+  "anchor": [
+    115,
+    108
+  ],
+  "px_per_m": 64.0,
+  "projection": {
+    "sx": 64.0,
+    "sy": 44.333333333333336,
+    "sz": 46.0
+  },
+  "height": 1.75,
+  "directions": 8,
+  "direction_rows": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "animations": {
+    "quieto": {
+      "cols": [
+        0
+      ]
+    },
+    "andar": {
+      "cols": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "fps": 8.0,
+      "speed": 1.4
+    },
+    "agachado": {
+      "cols": [
+        5
+      ]
+    },
+    "andar_agachado": {
+      "cols": [
+        6,
+        7,
+        8,
+        9
+      ],
+      "fps": 7.0,
+      "speed": 0.9
+    },
+    "granada": {
+      "cols": [
+        10,
+        11,
+        12
+      ],
+      "fps": 10.0,
+      "loop": false
+    },
+    "morir": {
+      "cols": [
+        13,
+        14,
+        15,
+        16
+      ],
+      "fps": 8.0,
+      "loop": false
+    }
+  },
+  "position_range": [
+    [
+      -1.85,
+      1.85
+    ],
+    [
+      -0.2,
+      2.05
+    ],
+    [
+      -1.15,
+      1.15
+    ]
+  ]
+}

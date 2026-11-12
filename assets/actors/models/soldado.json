@@ -1,0 +1,23 @@
+{
+  "_comentario": "El jugador del primer juego. Ver maniqui.json para el formato; además: proporciones (cabeza, piernas, brazos: factores sobre las del maniquí), equipo (casco, mochila, fusil) y, en los materiales, metal y rugosidad (0..1) opcionales.",
+  "altura": 1.75,
+  "proporciones": {"cabeza": 0.62, "piernas": 1.3, "brazos": 1.15},
+  "materiales": {
+    "piel": {"luz": "#f2c9a0", "sombra": "#c99a74"},
+    "uniforme": {"luz": "#7d8a46", "sombra": "#5a6630"},
+    "casco": {"luz": "#5f6b33", "sombra": "#434c22"},
+    "botas": {"luz": "#5a4030", "sombra": "#3c2a1f"},
+    "mochila": {"luz": "#8a7a4e", "sombra": "#665a36"},
+    "fusil": {"luz": "#55585c", "sombra": "#36383b", "metal": 0.8, "rugosidad": 0.45}
+  },
+  "contorno": "#2b2418",
+  "ojos": "#2b2418",
+  "partes": {
+    "cabeza": "piel", "oreja_d": "piel", "oreja_i": "piel", "mano_d": "piel", "mano_i": "piel",
+    "torso": "uniforme", "brazo_d": "uniforme", "brazo_i": "uniforme",
+    "pierna_d": "uniforme", "pierna_i": "uniforme", "bota_d": "botas", "bota_i": "botas",
+    "casco": "casco", "mochila": "mochila", "fusil": "fusil"
+  },
+  "equipo": ["casco", "mochila", "fusil"],
+  "animaciones": ["andar", "agachado", "andar_agachado", "granada", "morir"]
+}

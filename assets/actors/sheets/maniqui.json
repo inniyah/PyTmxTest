@@ -1,0 +1,72 @@
+{
+  "_comentario": "Generado por tools.actors: no editar a mano. Pies en 'anchor' (píxeles del fotograma); 'px_per_m' = píxeles por metro en horizontal; filas = direcciones desde el este en sentido horario.",
+  "frame": [
+    82,
+    109
+  ],
+  "cols": 9,
+  "rows": 8,
+  "anchor": [
+    41,
+    89
+  ],
+  "px_per_m": 64.0,
+  "projection": {
+    "sx": 64.0,
+    "sy": 44.333333333333336,
+    "sz": 46.0
+  },
+  "height": 1.7,
+  "directions": 8,
+  "direction_rows": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "animations": {
+    "quieto": {
+      "cols": [
+        0
+      ]
+    },
+    "andar": {
+      "cols": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "fps": 8.0,
+      "speed": 1.4
+    },
+    "correr": {
+      "cols": [
+        5,
+        6,
+        7,
+        8
+      ],
+      "fps": 10.0,
+      "speed": 4.0
+    }
+  },
+  "position_range": [
+    [
+      -0.7,
+      0.7
+    ],
+    [
+      -0.05,
+      1.8
+    ],
+    [
+      -0.6,
+      0.7
+    ]
+  ]
+}

@@ -13,7 +13,8 @@ navegación por caminos.
 - **Dibujo** con OpenGL 3.3: profundidad por píxel, iluminación por píxel con sol, ambiente y
   luces puntuales, día y noche, metal y superficies pulidas, brillo propio con halo y pulso,
   interiores como una casa de muñecas.
-- **Personajes** como cilindros con física de andar, saltar y empujarse; tipos definidos en
+- **Personajes** como cilindros con física de andar, saltar y empujarse; sprites en 8 direcciones
+  con normales y profundidad por píxel, generados por código mientras no haya arte; tipos definidos en
   datos; miles de NPC con niveles de detalle.
 - **Navegación**: grafo verificado contra la física, costes por material del suelo y por
   pendiente, campos de flujo, lugares y rutinas (casa ↔ plaza).
@@ -96,6 +97,8 @@ python -m engine.viewer MUNDO.cworld [opciones]
 
 | Opción | |
 |---|---|
+| `--player-type T` | Tipo del jugador, de `types.json` (por ejemplo, `soldado`) |
+| `--npc-type T` | Todos los NPC de ese tipo (por ejemplo, `enemigo`) |
 | `--npcs N` | N personajes. Si el mundo tiene grafo de navegación y casas, siguen la rutina casa ↔ plaza; si no, pasean |
 | `--spawn X Y`, `--spawn-level N` | Celda y planta donde aparece el jugador |
 | `--no-player` | Sin jugador: WASD mueve la vista |
@@ -308,10 +311,72 @@ El `.cworld` es una base de datos SQLite con:
 
 ## Personajes y NPC
 
-Los tipos de personaje están en `assets/actors/types.json` (persona, niño, perro, guardia):
+Los tipos de personaje están en `assets/actors/types.json` (persona, niño, perro, guardia, y los generados maniqui, soldado y enemigo):
 radio y altura del cilindro, escalón máximo, masa, velocidades, hoja de sprites, tinte y, para
 la navegación, ajustes de los costes por material (`material_costs`) y de la pendiente
 (`uphill`, `downhill`). Lo que un tipo no indica se toma de `defecto`.
+
+### Hojas de sprites
+
+Una hoja es un PNG con una fila por dirección y, en cada fila, los fotogramas. Sin nada más es
+una hoja de las de siempre (4 × 4: filas abajo, izquierda, derecha y arriba; un ciclo de andar
+de cuatro fotogramas), y el fotograma entero mide lo que el personaje. Junto a ella pueden ir:
+
+| Archivo | |
+|---|---|
+| `hoja.json` | Disposición: tamaño del fotograma, píxel de los pies (`anchor`), escala (`px_per_m`, `height`), direcciones (4 u 8) y la fila de cada una, y las animaciones por nombre con sus columnas, fotogramas por segundo, velocidad y si se repiten (`loop`) |
+| `hoja.a.png` | Albedo: el color sin sombrear, que es lo que ilumina el motor |
+| `hoja.n.png` | Normal por píxel, en ejes del mundo, como las piezas |
+| `hoja.p.png` | Posición por píxel en metros respecto a los pies (16 bits, con `position_range` del .json) |
+| `hoja.s.png` | Capa de superficie (metal, rugosidad, brillo propio), ver arriba |
+
+Con `anchor`, el sprite se dibuja a la escala con la que se generó (un píxel de la hoja, un píxel
+de mundo) y con los pies en su píxel. Con albedo, normales y posición, cada píxel se ilumina en
+su punto 3D y tiene su propia profundidad, como un tile: una luz a un lado alumbra ese lado, y un
+pie que asoma delante de una pared se ve delante. Lo que sobresale del cilindro de física (el
+fusil, una mano) puede rozar el escenario: lo que quedaría detrás de la cara norte del cilindro
+se acerca hasta ella (ahí nunca hay escenario), los roces de hasta 12 cm los gana el personaje
+y la silueta solo sale donde algo lo tapa más de 25 cm. Con 8 direcciones, el personaje mira en
+diagonal; si la hoja tiene `correr`, se usa cuando va más rápido que la mitad del camino entre
+andar y correr. El resto de animaciones (`agachado`, `andar_agachado`, `granada`, `morir`…) las
+pide el juego por su nombre con `SpriteSheet.anim_cols(nombre, tiempo)`; las que no se repiten
+se quedan en su último fotograma.
+
+### Personajes generados: `tools.actors`
+
+```
+python -m tools.actors [NOMBRE…]
+```
+
+Hasta que haya arte de verdad, los personajes se generan por código: un cuerpo hecho de formas
+redondeadas (elipsoides y cápsulas) en las poses de cada animación, renderizado con la misma
+cámara que las piezas del mundo. Cada descripción `assets/actors/models/NOMBRE.json` produce
+`assets/actors/sheets/NOMBRE.*`: la hoja en dos tonos con contorno, y su albedo, normales,
+posición, superficie (si algo es metálico) y disposición, en 8 direcciones. La descripción da:
+
+- `altura` en metros y `proporciones` (`cabeza`, `piernas`, `brazos`: factores sobre las del maniquí);
+- `materiales`, cada uno con su tono claro y su sombra (`luz`, `sombra`) y, opcionales, `metal` y `rugosidad`;
+- `partes`: el material de cada parte del cuerpo (cabeza, orejas, torso, brazos, manos, piernas,
+  botas) y del equipo; las manos y las botas, si no se dicen, son como el brazo y la pierna;
+- `equipo`: `casco`, `mochila`, `fusil`. Con fusil, quieto y andar llevan el arma apuntando
+  hacia donde mira;
+- `animaciones` además de `quieto`: `andar`, `correr`, `agachado`, `andar_agachado`, `granada`, `morir`.
+
+Hay tres: `maniqui` (el de la hoja original, ≈ 25 s), `soldado` (el jugador) y `enemigo` (≈ 70 s
+cada uno). Al morir, el personaje gira y cae de espaldas hacia el este o el oeste: en esta cámara,
+alguien tendido de norte a sur se vería casi igual que de pie. Por eso los fotogramas de estas
+hojas son anchos (caben tendidos).
+
+```bash
+python -m tools.actors soldado                                   # regenerar una hoja
+python -m tools.actors.preview assets/actors/sheets/soldado.png --out previas   # un GIF por animación
+python -m engine.viewer maps/levels/levels.cworld --player-type soldado --npc-type enemigo --npcs 30 --night
+```
+
+Un grafista puede sustituir los PNG respetando la disposición del `.json`; para el motor no hay
+diferencia.
+
+### Simulación por zonas
 
 La simulación tiene **niveles de detalle** alrededor del jugador: a menos de 60 m, física y
 comportamiento completos a 60 Hz; hasta 160 m, física a 30 Hz; más lejos, sin física (los NPC
@@ -378,6 +443,7 @@ engine/                     El motor
   events/                   Sucesos: su pequeño lenguaje (acciones y condiciones) y el sistema en el juego
   viewer.py                 Visor: python -m engine.viewer
 tools/pieces/               Catálogo de piezas, render oblicuo, tileset y mapas de prueba (terreno incluido)
+tools/actors/               Personajes generados: cuerpo, poses, render con la cámara del motor, hojas
 assets/                     Tileset de prueba, sprites, types.json, materials.json, fuente (DejaVu Sans)
 maps/                       Mapas de ejemplo (los .cworld se generan)
 tests/                      Tests (pytest)

@@ -1,0 +1,14 @@
+{
+  "_comentario": "Descripción de un personaje para 'python -m tools.actors'. altura en metros; materiales con su tono claro y su sombra; partes: material de cada grupo del cuerpo (cabeza, oreja_d, oreja_i, torso, brazo_d, brazo_i, pierna_d, pierna_i); animaciones además de 'quieto' (andar, correr).",
+  "altura": 1.7,
+  "materiales": {
+    "piel": {"luz": "#ffe8c6", "sombra": "#eead96"}
+  },
+  "contorno": "#874f4d",
+  "ojos": "#5e475f",
+  "partes": {
+    "cabeza": "piel", "oreja_d": "piel", "oreja_i": "piel", "torso": "piel",
+    "brazo_d": "piel", "brazo_i": "piel", "pierna_d": "piel", "pierna_i": "piel"
+  },
+  "animaciones": ["andar", "correr"]
+}

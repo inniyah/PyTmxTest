@@ -31,7 +31,7 @@ from engine.render.gpu_timer import GpuTimer
 from engine.render.bloom import Bloom
 from engine.render.overlay import TextOverlay
 from engine.render.sprites import (
-    ROWS_4, WALK_FPS, SpriteRenderer, SpriteSheet, delete_sheet, facing_index, facing_indices,
+    SpriteRenderer, SpriteSheet, delete_sheet, facing_index, facing_indices, read_layout,
 )
 from engine.render.world_renderer import Camera, Lighting, WorldRenderer
 from engine.world import cell as C
@@ -52,7 +52,8 @@ ROOM_OPEN_FRACTION = 0.25    # ... o esta fracción de su contorno; si no, no es
 STEP_UP = 1.6                # m: una celda sin techo junto a la habitación cuenta si su suelo está a
                              # menos de esto de los pies (un hueco de escalera)
 CUT_RADIUS_CELLS = 2.5
-LANTERN = {"color": (1.0, 0.62, 0.30), "radius": 5.0, "intensity": 1.3, "height": 1.5}
+# Farol del jugador: en alto y un poco hacia la cámara (al sur), para que alumbre la cara que se ve
+LANTERN = {"color": (1.0, 0.62, 0.30), "radius": 5.0, "intensity": 1.3, "height": 1.9, "south": 0.5}
 NPC_MIX = {"persona": 0.55, "niño": 0.15, "perro": 0.2, "guardia": 0.1}
 EVICT_EVERY = 2.0            # segundos entre descargas de chunks lejanos
 MAX_PHYSICS_STEPS = 4        # pasos de física por frame como mucho (a 15 fps o menos, va más lento)
@@ -60,7 +61,8 @@ MAX_PHYSICS_STEPS = 4        # pasos de física por frame como mucho (a 15 fps o
 
 class Viewer:
     def __init__(self, world_path, width=1280, height=720, visible=True, player=True,
-                 spawn=None, vsync=True, spawn_level=None, npcs=0, seed=None):
+                 spawn=None, vsync=True, spawn_level=None, npcs=0, seed=None, player_type="persona",
+                 npc_type=None):
         if not glfw.init():
             raise RuntimeError("No se pudo iniciar GLFW")
         glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
@@ -87,6 +89,9 @@ class Viewer:
         self.rng = np.random.default_rng(seed)
         self.types = load_types()
         self.table = ActorTable(self.types)
+        # Direcciones de la hoja de cada tipo (4 u 8), leídas de su disposición, sin OpenGL
+        self.type_directions = np.array([read_layout(ASSETS / self.types[n].sheet).get("directions", 4)
+                                         for n in self.table.type_names])
         self.routines = self._load_routines()
         g = self.renderer.geo
         self.events = EventSystem.from_store(self.view.store, g.cell_w, g.cell_h) \
@@ -105,8 +110,9 @@ class Viewer:
         self.cpu_ms = 0.0
         self.sheets = {}                                  # ruta -> SpriteSheet
         self.player_handle = None
+        self.npc_mix = {npc_type: 1.0} if npc_type else NPC_MIX
         if player:
-            self.player_handle = self.table.spawn("persona", self._spawn_point(spawn, spawn_level),
+            self.player_handle = self.table.spawn(player_type, self._spawn_point(spawn, spawn_level),
                                                   brain=BRAIN_NONE)
         if npcs:
             self.spawn_npcs(npcs)
@@ -166,8 +172,8 @@ class Viewer:
             return self.spawn_routine_npcs(count)
         v = self.view
         points = self.sim.spawn_points(count, self.rng, levels=list(range(v.level_min, v.level_max + 1)))
-        names = list(NPC_MIX)
-        kinds = self.rng.choice(names, len(points), p=list(NPC_MIX.values()))
+        names = list(self.npc_mix)
+        kinds = self.rng.choice(names, len(points), p=list(self.npc_mix.values()))
         for p, kind in zip(points, kinds):
             self.table.spawn(kind, p, brain=BRAIN_WANDER)
 
@@ -175,8 +181,8 @@ class Viewer:
         """Cada NPC en una casa (al azar), con la rutina casa ↔ plaza; empiezan esperando un poco."""
         R, t = self.routines, self.table
         houses = [p for p in R.places.values() if p.kind == "casa"]
-        names = list(NPC_MIX)
-        kinds = self.rng.choice(names, count, p=list(NPC_MIX.values()))
+        names = list(self.npc_mix)
+        kinds = self.rng.choice(names, count, p=list(self.npc_mix.values()))
         for kind in kinds:
             home = houses[int(self.rng.integers(len(houses)))]
             nodes = R.cache.goal_nodes(home)
@@ -314,10 +320,11 @@ class Viewer:
         t.anim_time[rows] = np.where(moving, t.anim_time[rows] + dt, 0.0)
         # Dirección: los NPC miran hacia donde se mueven; el jugador, hacia donde quiere ir
         t.facing[rows] = facing_indices(np.where(moving, t.vel[rows, 0], 0), np.where(moving, t.vel[rows, 2], 0),
-                                        t.facing[rows])
+                                        t.facing[rows], self.type_directions[t.type[rows]])
         if player is not None:
             row = t.row(self.player_handle)
-            t.facing[row] = facing_index(*t.wish[row], int(t.facing[row]))
+            t.facing[row] = facing_index(*t.wish[row], int(t.facing[row]),
+                                         int(self.type_directions[t.type[row]]))
             if self.follow:
                 self._center_on_player(1 - np.exp(-FOLLOW_RATE * dt))
 
@@ -558,7 +565,8 @@ class Viewer:
         if self.player is not None and self.lantern:
             X, Y, Z = self.player.pos
             c = LANTERN["color"]
-            r.dynamic_lights.append((X, Y + LANTERN["height"], Z, *c, LANTERN["radius"], LANTERN["intensity"]))
+            r.dynamic_lights.append((X, Y + LANTERN["height"], Z + LANTERN["south"], *c, LANTERN["radius"],
+                                     LANTERN["intensity"]))
 
     # --- Dibujo ---
 
@@ -597,9 +605,10 @@ class Viewer:
         for path in np.unique(sheets):
             sel = rows[sheets == path]
             sheet = self.sheet(str(path))
+            speed = np.hypot(t.vel[sel, 0], t.vel[sel, 2])
             self.sprites.draw_batch(
                 sheet, t.pos[sel], t.support[sel], t.height[sel], t.radius[sel],
-                np.array([ROWS_4[int(f)] for f in t.facing[sel]]), sheet.walk_cols(t.anim_time[sel], WALK_FPS),
+                sheet.row_of(t.facing[sel]), sheet.frame_cols(t.anim_time[sel], speed),
                 t.tint[sel], self.camera, r.show_depth, lights=r, cut=cut, max_level=r.max_level)
         self.draw_player_silhouette(cut)
 
@@ -610,8 +619,9 @@ class Viewer:
         t, row = self.table, self.table.row(self.player_handle)
         sheet = self.sheet(self.types[t.type_names[t.type[row]]].sheet)
         self.sprites.draw_silhouettes(
-            sheet, t.pos[row:row + 1], t.height[row:row + 1], np.array([ROWS_4[int(t.facing[row])]]),
-            sheet.walk_cols(t.anim_time[row:row + 1], WALK_FPS), self.camera, lights=self.renderer,
+            sheet, t.pos[row:row + 1], t.height[row:row + 1], sheet.row_of(t.facing[row:row + 1]),
+            sheet.frame_cols(t.anim_time[row:row + 1], np.hypot(*t.vel[row, [0, 2]])), self.camera,
+            lights=self.renderer, radius=t.radius[row:row + 1],
             cut=cut, max_level=self.renderer.max_level)
 
     def visible_actors(self):
@@ -711,6 +721,9 @@ def main(argv=None) -> int:
     parser.add_argument("--spawn", type=float, nargs=2, metavar=("X", "Y"), help="celda de aparición")
     parser.add_argument("--spawn-level", type=int, help="planta de aparición (por defecto, la más alta)")
     parser.add_argument("--npcs", type=int, default=0, help="número de personajes que pasean")
+    parser.add_argument("--player-type", default="persona",
+                        help="tipo del jugador, de assets/actors/types.json (p. ej. soldado)")
+    parser.add_argument("--npc-type", help="todos los NPC de este tipo (p. ej. enemigo)")
     parser.add_argument("--seed", type=int, help="semilla de la aparición y del paseo de los NPC")
     parser.add_argument("--no-vsync", action="store_true", help="sin sincronía vertical (medir fps reales)")
     parser.add_argument("--tint", action="store_true", help="empezar con el tinte por altura")
@@ -727,7 +740,8 @@ def main(argv=None) -> int:
 
     viewer = Viewer(args.world, *args.size, visible=args.screenshot is None,
                     player=not args.no_player, spawn=args.spawn, vsync=not args.no_vsync,
-                    spawn_level=args.spawn_level, npcs=args.npcs, seed=args.seed)
+                    spawn_level=args.spawn_level, npcs=args.npcs, seed=args.seed,
+                    player_type=args.player_type, npc_type=args.npc_type)
     try:
         if args.zoom:
             viewer.camera.zoom = args.zoom

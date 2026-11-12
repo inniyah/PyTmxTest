@@ -53,6 +53,25 @@
     },
     "uphill": 2.0
   },
+  "maniqui": {
+    "sheet": "actors/sheets/maniqui.png"
+  },
+  "soldado": {
+    "radius": 0.28,
+    "height": 1.75,
+    "mass": 80.0,
+    "max_speed": 2.2,
+    "walk_speed": 1.4,
+    "sheet": "actors/sheets/soldado.png"
+  },
+  "enemigo": {
+    "radius": 0.28,
+    "height": 1.75,
+    "mass": 80.0,
+    "max_speed": 2.0,
+    "walk_speed": 1.4,
+    "sheet": "actors/sheets/enemigo.png"
+  },
   "guardia": {
     "radius": 0.32,
     "height": 1.95,
