@@ -121,8 +121,13 @@ techo y las plantas de arriba de la habitación, salvo la pared del fondo, que s
 pared de delante queda en un zócalo. Los modos *círculo* y *planta* ocultan todo lo que hay por
 encima de su planta, en un círculo o en todo el mapa.
 
-**Silueta.** Donde algo tapa al jugador (detrás de una casa, por ejemplo), se dibuja su silueta
-en azul claro a través de lo que lo tapa (tecla X para quitarla).
+**Silueta.** Cuando el escenario oculta al jugador (detrás de una casa, por ejemplo), se dibuja
+su silueta en azul claro a través de lo que lo tapa (tecla X para quitarla). Si está oculto lo
+decide un rayo desde su pecho y otro desde su cabeza hacia la cámara, por la geometría del mundo
+(macizos, paredes, suelos y terreno): un pie hundido en una rampa, una mano que entra en la pared
+de al lado o un escalón bajo delante no la activan, y los demás personajes no cuentan (se dibuja
+antes que ellos, así que uno que pase por delante la tapa). En un interior no hace falta: el corte
+ya quita lo que lo tapaba.
 
 La barra de título muestra la versión, los fps, los personajes por zona de detalle
 (cerca/medio/lejos), el estado de las rutinas, y los tiempos: simulación, **GPU** por tramo

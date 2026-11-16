@@ -383,3 +383,69 @@ def test_player_silhouette_behind_a_building(world, viewer_factory, tmp_path):
         assert counts[0] < 20 and counts[1] > 300
     finally:
         v.close()
+
+
+# --- Cuándo hay silueta: solo si el escenario oculta al jugador ------------------------------
+
+@pytest.mark.parametrize("spot, hidden", [
+    ((17.5, 1.5), True),            # detrás del edificio
+    ((17.5, 2.75), True),           # pegado a su pared norte, por fuera: oculto del todo
+    ((6.5, 13.5), False),           # en la calle
+    ((13.75, 6.5), False),          # pegado a la pared oeste por fuera: el brazo entra en ella
+    ((20.5, 7.5), False),           # en la escalera: un pie se hunde en el peldaño
+    ((15.5, 10.5), False),          # bajo el balcón
+])
+def test_silhouette_only_when_the_scenery_hides_the_player(world, viewer_factory, tmp_path, spot, hidden):
+    v = viewer_factory(world, 480, 320, visible=False, spawn=spot, spawn_level=0)
+    try:
+        t = v.table
+        t.anim_time[t.row(v.player_handle)] = 0.3          # andando: brazos y piernas fuera del cilindro
+        v._center_on_player(1.0)
+        v.screenshot(tmp_path / "s.png")
+        assert v.player_hidden() == hidden and v.silhouette_drawn == hidden
+    finally:
+        v.close()
+
+
+def test_silhouette_is_not_drawn_over_other_characters_or_indoors(world, viewer_factory, tmp_path):
+    """Un NPC delante no cuenta como algo que tapa; en un interior, el corte ya lo deja a la vista."""
+    v = viewer_factory(world, 480, 320, visible=False, spawn=(6.5, 13.5), spawn_level=0)
+    try:
+        npc = v.table.spawn("persona", v._spawn_point((6.5, 14.3), 0), brain=0)
+        assert npc is not None
+        v._center_on_player(1.0)
+        v.screenshot(tmp_path / "a.png")
+        assert not v.silhouette_drawn
+        v.player.pos = v._spawn_point((14.3, 6.5), 0)          # dentro, junto a la pared oeste
+        v._center_on_player(1.0)
+        v.screenshot(tmp_path / "b.png")
+        v.screenshot(tmp_path / "b.png")
+        assert v.renderer.cut_level is not None and not v.silhouette_drawn
+    finally:
+        v.close()
+
+
+def test_nothing_of_the_player_shows_through_a_wall_in_front(world, viewer_factory, tmp_path):
+    """El caso de la captura: en la planta 1, pegado por dentro a la pared sur (que lo tapa), de
+    perfil y andando. El brazo del lado de la cámara sobresale de su cilindro y llegaba al otro
+    lado de la pared; ahora lo que sobresale por delante cuenta como si estuviera en su cilindro."""
+    from PIL import Image
+    v = viewer_factory(world, 480, 320, visible=False, spawn=(18.35, 9.9), spawn_level=1)
+    try:
+        t, row = v.table, v.table.row(v.player_handle)
+        t.pos[row] = (36.7, 3.0, 19.8)
+        t.support[row] = 3.0
+        _green_player(v)
+        v.silhouette = False
+        v.camera.zoom = 2.0
+        v._center_on_player(1.0)
+        assert v.player_hidden()
+        for facing in range(8):
+            for k in range(3):
+                t.facing[row], t.anim_time[row] = facing, 0.02 + k * 0.13
+                t.vel[row] = (1.4, 0.0, 0.0)
+                v.screenshot(tmp_path / "w.png")
+                seen = _green(np.asarray(Image.open(tmp_path / "w.png").convert("RGB")).astype(int))
+                assert seen == 0, f"orientación {facing}: {seen} píxeles a través de la pared"
+    finally:
+        v.close()

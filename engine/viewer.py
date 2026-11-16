@@ -45,6 +45,10 @@ ASSETS = Path(__file__).resolve().parent.parent / "assets"
 CUT_MODES = ("fachada", "círculo", "planta", "no")   # cómo se oculta lo que tapa al personaje
 FACADE_KEEP = 0.5            # m: zócalo que se conserva de lo que hay delante (paredes de su planta)
 MASK_HALF = 24               # la máscara de corte cubre 48 × 48 celdas alrededor del personaje
+OCCLUSION_START = 0.35       # m: el rayo de la silueta empieza fuera de su propio cuerpo...
+OCCLUSION_STEP = 0.08        # ...y avanza en pasos más finos que una pared (16 cm)
+WALL_BAND = 0.16             # m: grosor de una pared fina, a cada lado de su borde
+SLAB = 0.12                  # m: justo encima de un suelo cuenta como chocar con él
 MAX_ROOM_CELLS = 1200        # una "habitación" más grande que esto se corta ahí
 HOLE_SEARCH = 3              # celdas: bajo un agujero, hasta dónde se busca el techo de la habitación
 ROOM_OPEN_EDGES = 2          # una habitación puede tener tantos bordes abiertos (puertas) ...
@@ -98,6 +102,7 @@ class Viewer:
             if self.view.store.events() else None
         self.overlay = TextOverlay()
         self.silhouette = True                 # silueta del jugador donde algo lo tapa (tecla X)
+        self.silhouette_drawn = False
         self.bloom = Bloom()
         self.halo = True                       # halo del brillo propio (tecla H)
         self.halo_active = False
@@ -594,11 +599,14 @@ class Viewer:
         self.update_lights()
         r.draw(self.camera, glfw.get_framebuffer_size(self.window))
         t = self.table
+        cut = None if r.cut_level is None else (r.cut_level, r.cut_center, r.cut_radius)
+        # La silueta, justo después del escenario: solo él puede taparla (un personaje que pase
+        # por delante, dibujado después, la tapa como es natural)
+        self.draw_player_silhouette(cut)
         rows = self.visible_actors()
         self.drawn_actors = int(rows.size)
         if rows.size == 0:
             return
-        cut = None if r.cut_level is None else (r.cut_level, r.cut_center, r.cut_radius)
         self.sprites.draw_calls = 0
         types = np.array(t.type_names)[t.type[rows]]
         sheets = np.array([self.types[name].sheet for name in types])
@@ -611,7 +619,6 @@ class Viewer:
                 sheet.row_of(t.facing[sel]), sheet.frame_cols(t.anim_time[sel], speed),
                 t.tint[sel], self.camera, r.show_depth, lights=r, cut=cut, max_level=r.max_level,
                 outfit=self.outfit_for(sheet, sel))
-        self.draw_player_silhouette(cut)
 
     def outfit_for(self, sheet, rows):
         """Colores de ropa de esos personajes en el orden de las partes de su hoja (n, 6), o None."""
@@ -624,10 +631,51 @@ class Viewer:
                 out[:, k] = t.outfit[rows, t.outfit_index(part)]
         return out
 
+    def occluded(self, point) -> bool:
+        """¿Tapa el escenario este punto? Un rayo desde él hacia la cámara, por la geometría del
+        mundo: macizos, medias celdas macizas, paredes (franjas junto a los bordes) y suelos y
+        terreno (justo encima de una superficie). Los personajes no cuentan."""
+        g, v, phys = self.renderer.geo, self.view, self.sim.physics
+        d = np.array([0.0, g.sz, g.sy])
+        d /= np.linalg.norm(d)
+        top = (v.level_max + 1) * g.cell_h + 0.5
+        reach = max(0.0, (top - point[1]) / d[1])
+        if reach <= OCCLUSION_START:
+            return False
+        ts = np.arange(OCCLUSION_START, reach, OCCLUSION_STEP)
+        x, y, z = (np.asarray(point, float)[:, None] + d[:, None] * ts).astype(float)
+        cx, cy = np.floor(x / g.cell_w).astype(int), np.floor(z / g.cell_w).astype(int)
+        lv = np.floor(y / g.cell_h).astype(int)
+        u, w = x / g.cell_w - cx, z / g.cell_w - cy
+        cells = v.cells(cx, cy, lv)
+        band = WALL_BAND / g.cell_w
+        hit = C.fill_contains(C.fill(cells), u, w)
+        hit |= (C.wall_n(cells) != 0) & (w < band)
+        hit |= (C.wall_w(cells) != 0) & (u < band)
+        hit |= (C.wall_n(v.cells(cx, cy + 1, lv)) != 0) & (w > 1 - band)       # la pared del borde sur
+        hit |= (C.wall_w(v.cells(cx + 1, cy, lv)) != 0) & (u > 1 - band)       # la del borde este
+        ground = phys.support(x, z, y)
+        hit |= (ground > -1e8) & (y - ground < SLAB)                           # un suelo o el terreno
+        return bool(hit.any())
+
+    def player_hidden(self) -> bool:
+        """¿Está el jugador oculto por el escenario? Si lo están su pecho o su cabeza (no un pie
+        hundido en una rampa, ni una mano que entra en la pared de al lado)."""
+        t, row = self.table, self.table.row(self.player_handle)
+        X, Y, Z = t.pos[row]
+        h = float(t.height[row])
+        return any(self.occluded((X, Y + f * h, Z)) for f in (0.6, 0.92))
+
     def draw_player_silhouette(self, cut):
-        """Silueta del jugador donde algo lo tapa (al aire libre no se oculta nada del escenario)."""
+        """Silueta del jugador donde algo lo tapa, solo si el escenario lo oculta de verdad."""
+        self.silhouette_drawn = False
         if not self.silhouette or self.player is None or self.renderer.show_depth:
             return
+        if self.renderer.cut_level is not None:
+            return                       # en un interior, lo que lo tapaba ya lo quita el corte
+        if not self.player_hidden():
+            return
+        self.silhouette_drawn = True
         t, row = self.table, self.table.row(self.player_handle)
         sheet = self.sheet(self.types[t.type_names[t.type[row]]].sheet)
         self.sprites.draw_silhouettes(

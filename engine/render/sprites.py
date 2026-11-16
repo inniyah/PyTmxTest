@@ -112,7 +112,8 @@ const float SPRITE_WRAP = 0.2;     // luz que "envuelve" un poco el borde de som
 // está delante de su cilindro queda siempre a más de ~0.25 m, así que no se ve a través de nada.
 // La silueta solo sale donde algo lo tapa más de SILHOUETTE_MARGIN.
 const float TOUCH_MARGIN = 0.12;
-const float SILHOUETTE_MARGIN = 0.25;
+const float FRONT_INSET = 0.08;    // lo de delante cuenta hasta 8 cm antes de la cara del cilindro
+const float SILHOUETTE_MARGIN = 0.03;   // poco: si hay silueta o no lo decide el visor (¿lo oculta el escenario?)
 """ + LIGHTING_GLSL + FACADE_GLSL + """
 layout(location = 0) out vec4 frag;
 layout(location = 1) out vec4 glow;    // los personajes tapan el brillo de lo que hay detrás
@@ -173,8 +174,20 @@ void main() {
         // norte (el fusil, la mochila contra una pared) se acerca hasta ella por su rayo
         float back = v_feet.y - v_radius;
         if (yz.y < back) closeness += (back - yz.y) * ray * ray / u_scale.y;
+        // Y lo que sobresale por delante (el brazo del lado de la cámara de perfil, el que se
+        // adelanta al andar), hasta un poco antes de su cara sur: pegado a algo que tiene delante,
+        // ninguna parte suya lo atraviesa
+        float front = v_feet.y + v_radius - FRONT_INSET;
+        if (yz.y > front) closeness -= (yz.y - front) * ray * ray / u_scale.y;
     }
-    if (u_shadow != 1) closeness += TOUCH_MARGIN * ray;
+    if (u_shadow != 1) {
+        // Margen de roce: lo que está a la altura del centro del personaje gana los roces (un pie en
+        // una rampa, una mano contra la pared de al lado); lo que está por delante del centro (el
+        // brazo del lado de la cámara de perfil, el que se adelanta al andar) lo va perdiendo: si
+        // está pegado a algo que tiene delante, eso lo tapa
+        float ahead = maps ? max(yz.y - v_feet.y, 0.0) : 0.0;
+        closeness += max(TOUCH_MARGIN - ahead, 0.0) * ray;
+    }
     if (u_shadow == 2) closeness += SILHOUETTE_MARGIN * ray;
     float depth = clamp(1.0 - (closeness - u_closeness_range.x)
                         / (u_closeness_range.y - u_closeness_range.x), 0.0, 1.0);
