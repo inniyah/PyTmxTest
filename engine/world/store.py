@@ -20,7 +20,7 @@ from typing import Dict, Iterable, Iterator, Optional, Sequence, Tuple
 
 from .chunk import PARTS, ChunkData
 
-FORMAT_VERSION = 2          # 2: suelos de 6 bits por mitad (pendientes suaves)
+FORMAT_VERSION = 3          # 3: celdas de 16 bits con paleta del mundo (2: suelos de 6 bits por mitad)
 
 _SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -30,6 +30,9 @@ CREATE TABLE IF NOT EXISTS atlas_regions (id INTEGER PRIMARY KEY, page INTEGER,
     x INTEGER, y INTEGER, w INTEGER, h INTEGER, border INTEGER);
 CREATE TABLE IF NOT EXISTS atlas_pages (page INTEGER, kind TEXT, png BLOB, PRIMARY KEY (page, kind));
 CREATE TABLE IF NOT EXISTS nav (cx INTEGER, cy INTEGER, data BLOB, PRIMARY KEY (cx, cy));
+CREATE TABLE IF NOT EXISTS palette (id INTEGER PRIMARY KEY, packed INTEGER, props TEXT);
+CREATE TABLE IF NOT EXISTS cell_state (x INTEGER, y INTEGER, level INTEGER, state INTEGER,
+                                       PRIMARY KEY (x, y, level));
 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, name TEXT, level INTEGER,
                                    x0 INTEGER, y0 INTEGER, x1 INTEGER, y1 INTEGER,
                                    trigger TEXT, who TEXT, times INTEGER, condition TEXT,
@@ -99,7 +102,9 @@ class SQLiteWorldStore(WorldStore):
             return None
         blobs = {p: (zlib.decompress(b) if self._compressed and b is not None else b)
                  for p, b in zip(parts, row)}
-        return ChunkData.from_blobs(cx, cy, self.meta()["chunk_size"], blobs)
+        chunk = ChunkData.from_blobs(cx, cy, self.meta()["chunk_size"], blobs)
+        chunk.palette = self.palette()
+        return chunk
 
     def write_chunk(self, chunk: ChunkData):
         blobs = chunk.to_blobs()
@@ -144,6 +149,35 @@ class SQLiteWorldStore(WorldStore):
         return [k for (k,) in self.db.execute("SELECT DISTINCT kind FROM atlas_pages ORDER BY kind")]
 
     # --- Ciclo de vida ---
+
+    # --- Paleta de celdas ---
+
+    def write_palette(self, palette):
+        self.db.execute("DELETE FROM palette")
+        self.db.executemany("INSERT INTO palette VALUES (?, ?, ?)", palette.rows())
+        self._palette = palette
+
+    def palette(self):
+        if getattr(self, "_palette", None) is None:
+            from .palette import Palette
+            try:
+                rows = self.db.execute("SELECT id, packed, props FROM palette ORDER BY id").fetchall()
+            except sqlite3.OperationalError:
+                rows = []
+            self._palette = Palette.from_rows(rows)
+        return self._palette
+
+    # --- Estado de las celdas que lo tienen ---
+
+    def write_cell_state(self, state):
+        self.db.execute("DELETE FROM cell_state")
+        self.db.executemany("INSERT INTO cell_state VALUES (?, ?, ?, ?)", state.rows())
+
+    def cell_state(self):
+        try:
+            return self.db.execute("SELECT x, y, level, state FROM cell_state").fetchall()
+        except sqlite3.OperationalError:
+            return []
 
     # --- Sucesos y marcadores ---
 

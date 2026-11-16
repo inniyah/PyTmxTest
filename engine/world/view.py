@@ -6,7 +6,7 @@ rejilla dice en qué hueco está cada chunk, así que cualquier consulta, toque 
 que toque, se resuelve con unas pocas indexaciones, sin bucles por chunk ni por punto.
 
 Regla de las columnas:
-    por debajo del tramo guardado -> macizo (CELL_SOLID)
+    por debajo del tramo guardado -> macizo (índice 0xFFFF de la paleta)
     por encima del tramo          -> aire (0)
     fuera de los límites del mapa -> macizo, a cualquier altura
     chunk no guardado (vacío)     -> columnas vacías que empiezan en el nivel más bajo
@@ -16,7 +16,8 @@ from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
-from .cell import CELL_SOLID
+from .palette import AIR, SOLID
+from .state import CellState
 from .chunk import OBSTACLE_PARTS, PARTS, ChunkData
 from .store import FORMAT_VERSION, WorldStore
 
@@ -26,6 +27,8 @@ NOT_LOADED, ABSENT = -1, -2          # valores especiales de la rejilla de chunk
 class WorldView:
     def __init__(self, store: WorldStore, with_visual: bool = True):
         self.store = store
+        self.palette = store.palette()
+        self.state = CellState(store.cell_state())      # estado de las celdas que lo tienen
         meta = store.meta()
         if meta.get("format_version") != FORMAT_VERSION:
             raise ValueError(f"Mundo compilado con el formato {meta.get('format_version')}; este motor usa el "
@@ -54,15 +57,15 @@ class WorldView:
         self.pool_start = np.zeros((0, cols), np.int64)
         self.pool_len = np.zeros((0, cols), np.int64)
         self.pool_offset = np.zeros((0, cols), np.int64)     # posición en los búferes comunes
-        self.obstacles = np.zeros(0, np.uint32)
+        self.id_pool = np.zeros(0, np.uint16)           # índices a la paleta (la mitad que 32 bits)
         self.visual_cells = np.zeros((0, 4), np.uint32)
 
     def _add_to_pool(self, chunk: ChunkData):
-        base = len(self.obstacles)
+        base = len(self.id_pool)
         self.pool_start = np.vstack([self.pool_start, chunk.col_start.astype(np.int64)[None]])
         self.pool_len = np.vstack([self.pool_len, chunk.col_len.astype(np.int64)[None]])
         self.pool_offset = np.vstack([self.pool_offset, (chunk.offset + base)[None]])
-        self.obstacles = np.concatenate([self.obstacles, chunk.obstacles])
+        self.id_pool = np.concatenate([self.id_pool, chunk.cells])
         if self.with_visual:
             self.visual_cells = np.concatenate([self.visual_cells, chunk.visual])
         self._slot_keys.append((chunk.cx, chunk.cy))
@@ -131,12 +134,33 @@ class WorldView:
         below = ~inside | (rel < 0)
         return stored, below, np.where(stored, base + rel, 0), shape
 
-    def cells(self, x, y, z) -> np.ndarray:
-        """Valor de 32 bits de las celdas (x, y, nivel). Acepta escalares o arrays."""
+    def cell_ids(self, x, y, z) -> np.ndarray:
+        """Índices de paleta (uint16) de las celdas (x, y, nivel): 0 aire, 0xFFFF macizo (también
+        lo que hay bajo cada columna). Acepta escalares o arrays."""
         stored, below, pos, shape = self._locate(x, y, z)
-        out = np.where(below, np.uint32(CELL_SOLID), np.uint32(0)).astype(np.uint32)
-        out[stored] = self.obstacles[pos[stored]]
+        out = np.where(below, np.uint16(SOLID), np.uint16(AIR)).astype(np.uint16)
+        out[stored] = self.id_pool[pos[stored]]
         return out.reshape(shape)
+
+    def cells(self, x, y, z) -> np.ndarray:
+        """Valor de 32 bits de las celdas (x, y, nivel), a través de la paleta (ver ``cell``)."""
+        return self.palette.lut[self.cell_ids(x, y, z)]
+
+    def set_cell(self, x: int, y: int, z: int, value: int, props: dict = None) -> int:
+        """Cambia la descripción de una celda durante la partida (una pared que se rompe): su
+        nuevo valor de 32 bits (y propiedades nuevas, si las hay) se busca en la paleta, que crece
+        si hace falta. Solo celdas dentro del tramo guardado de su columna. Devuelve el índice.
+        Quien la cambie debe rehacer lo que dependa de ella (la malla del chunk, el grafo)."""
+        self.load(x >> self.shift, y >> self.shift)
+        stored, _below, pos, _shape = self._locate(x, y, z)
+        if not stored.all():
+            raise ValueError(f"La celda ({x}, {y}, {z}) no está en el tramo guardado de su columna")
+        pid = self.palette.add(value, props)
+        self.id_pool[pos[0]] = pid
+        chunk = self.chunk(x >> self.shift, y >> self.shift)
+        c = ((y & (self.chunk_size - 1)) << self.shift) | (x & (self.chunk_size - 1))
+        chunk.cells[chunk.offset[c] + (z - int(chunk.col_start[c]))] = pid
+        return pid
 
     def visual(self, x, y, z) -> np.ndarray:
         """Huecos visuales (…, 4) de las celdas; ceros donde no hay nada guardado."""

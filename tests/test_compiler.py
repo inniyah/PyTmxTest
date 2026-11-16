@@ -243,13 +243,17 @@ def test_compression_does_not_change_the_world(tmp_path):
 
 
 def test_palette_index_width_adapts(tmp_path):
+    from engine.world.palette import Palette
     n = 300                                               # más de 256 valores distintos
+    palette = Palette()
+    ids = palette.ids_for(np.arange(1, n + 1, dtype=np.uint32) * 7)
     chunk = ChunkData(0, 0, 32, np.zeros(1024, np.int16), np.r_[np.ones(n, np.uint8), np.zeros(1024 - n, np.uint8)],
-                      np.arange(n, dtype=np.uint32) * 7, np.zeros((n, 4), np.uint32))
+                      ids, np.zeros((n, 4), np.uint32), palette)
     blobs = chunk.to_blobs()
     assert len(blobs["obst_index"]) == 2 * n and len(blobs["vis_index"]) == n
     back = ChunkData.from_blobs(0, 0, 32, blobs)
-    assert np.array_equal(back.obstacles, chunk.obstacles)
+    back.palette = palette
+    assert np.array_equal(back.cells, chunk.cells) and np.array_equal(back.obstacles, chunk.obstacles)
 
 
 def test_cli(tmp_path, capsys):

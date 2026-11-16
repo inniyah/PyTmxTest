@@ -38,6 +38,7 @@ from engine.world import visual as V
 from engine.world.cellspec import CellConflict, CellSpec
 from engine.world.chunk import ChunkData
 from engine.world.materials import Materials, load_materials
+from engine.world.palette import Palette, PaletteFull
 from engine.world.store import FORMAT_VERSION, SQLiteWorldStore
 
 COMPILER_VERSION = "0.1"
@@ -495,7 +496,9 @@ def collect_events(tmx: tm.TiledMap, cell_w: float, report: Report):
 
 # --- 5. Columnas y chunks ------------------------------------------------------------
 
-def build_chunks(world: World, obstacles: np.ndarray, visual: np.ndarray, size: int):
+def build_chunks(world: World, obstacles: np.ndarray, ids: np.ndarray, visual: np.ndarray, size: int,
+                 palette: Palette):
+    """Chunks con columnas recortadas a lo que tienen dentro; cada celda, su índice de paleta."""
     content = (obstacles != 0) | visual.any(axis=-1)              # (H, D, W)
     has = content.any(axis=0)
     first = np.argmax(content, axis=0)
@@ -521,7 +524,7 @@ def build_chunks(world: World, obstacles: np.ndarray, visual: np.ndarray, size: 
             z = lo[col_of_cell] + (np.arange(len(col_of_cell)) - offset[col_of_cell])
             cy_idx, cx_idx = iy.ravel()[col_of_cell], ix.ravel()[col_of_cell]
             yield ChunkData(cx, cy, size, col_start, col_len,
-                            obstacles[z, cy_idx, cx_idx], visual[z, cy_idx, cx_idx])
+                            ids[z, cy_idx, cx_idx], visual[z, cy_idx, cx_idx], palette)
 
 
 # --- Todo junto ----------------------------------------------------------------------
@@ -554,6 +557,13 @@ def compile_tmx(tmx_path, out_path, chunk_size: int = 32, compression: str = "zl
     used = np.unique(world.tiles & GID_MASK)
     region_of_gid, regions, pages = build_atlas(tmx, tmx_path, used[used != 0], report)
     visual = visual_values(world, region_of_gid)
+    # Paleta de celdas: cada combinación distinta, una vez (un error si no caben en 16 bits)
+    palette = Palette()
+    ids = None
+    try:
+        ids = palette.ids_for(obstacles)
+    except PaletteFull as e:
+        report.errors.append(f"{e} (hay demasiadas combinaciones distintas de piezas en las celdas)")
     # Antes de decidir si hay errores: un suceso mal escrito impide compilar
     events, markers = collect_events(tmx, float(next(
         (p.value for ts in tmx.tilesets for k, p in ts.properties.items() if k == "cell_width_m"), 2.0)), report)
@@ -566,9 +576,11 @@ def compile_tmx(tmx_path, out_path, chunk_size: int = 32, compression: str = "zl
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with SQLiteWorldStore(out_path, "w") as store:
         store.set_meta({"format_version": FORMAT_VERSION, "compression": compression})
-        for chunk in build_chunks(world, obstacles, visual, chunk_size):
+        for chunk in build_chunks(world, obstacles, ids, visual, chunk_size, palette):
             store.write_chunk(chunk)
             chunks += 1
+        store.write_palette(palette)
+        report.stats["paleta"] = len(palette)
         store.write_atlas(regions, pages)
         cell_w = float(next((p.value for ts in tmx.tilesets for k, p in ts.properties.items()
                              if k == "cell_width_m"), 2.0))

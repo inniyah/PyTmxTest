@@ -293,12 +293,20 @@ tiles en una celda, un suelo que sobresale de su celda con la celda de arriba oc
 la posición. Al terminar muestra un resumen: celdas, chunks, regiones del atlas, luces,
 lugares, nodos y aristas de navegación, tiempos y tamaño.
 
+Cada celda del mundo compilado es un **índice de 16 bits a la paleta del mundo**: 0 es aire,
+0xFFFF es macizo (también lo que hay bajo cada columna) y del 1 al 0xFFFE, cada combinación
+distinta de paredes, suelos, techos, material y flags que aparece en el mapa, guardada una sola
+vez (un mapa de prueba tiene una docena; caben 65 534). Cada entrada tiene además un hueco para
+propiedades nuevas sin cambiar el formato. Lo que cambia durante la partida va aparte: un estado
+de 16 bits solo en las celdas que lo tienen (puertas, trampas…).
+
 El `.cworld` es una base de datos SQLite con:
 
 - **Chunks** de 32 × 32 columnas (configurable). Cada columna guarda solo las plantas que
   ocupa; por encima hay aire y por debajo, macizo.
 - **Atlas** de texturas: color, posición, normales y albedo, con un borde de 16 px por región
   para los niveles reducidos (mipmaps) que se usan de lejos.
+- **La paleta de celdas** y el **estado** de las celdas que lo tienen.
 - **Luces, lugares, materiales, sucesos y marcadores.**
 - **Grafo de navegación** (salvo con `--no-nav`): superficies transitables, sus vecinos, su
   holgura y su material. Se calcula con la misma física que mueve a los personajes, así que lo
@@ -338,8 +346,13 @@ hero = actors.get(actors.spawn("persona", [12.0, 0.0, 9.0], brain=0))
 hero.wish = (1.0, 0.0)          # andar hacia el este (X), a toda velocidad
 sim.step(2.0)                   # 2 s de simulación a paso fijo (60 Hz)
 print(hero.pos, hero.grounded)
-print(world.cells(6, 4, 0))     # valor de 32 bits de la celda (6, 4) de la planta 0
+print(world.cells(6, 4, 0))     # valor de 32 bits de la celda (6, 4) de la planta 0 (ver cell.py)
+print(world.cell_ids(6, 4, 0))  # su índice en la paleta (0 aire, 0xFFFF macizo)
+world.state.set(6, 4, 0, 1)     # estado de 16 bits de esa celda (una puerta abierta, p. ej.)
 ```
+
+`world.set_cell(x, y, nivel, valor)` cambia la descripción de una celda durante la partida (la
+paleta crece si hace falta).
 
 Coordenadas: X hacia el este, Z hacia el sur, Y hacia arriba, en metros. La celda (x, y) de la
 planta z ocupa [2x, 2x+2) × [2y, 2y+2) en planta y [3z, 3z+3) en altura.

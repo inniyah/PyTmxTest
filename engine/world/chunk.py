@@ -29,11 +29,17 @@ class ChunkData:
     size: int
     col_start: np.ndarray       # (size²,) int16
     col_len: np.ndarray         # (size²,) uint8
-    obstacles: np.ndarray       # (celdas,) uint32
+    cells: np.ndarray           # (celdas,) uint16: índices a la paleta del mundo (0 aire, 0xFFFF macizo)
     visual: np.ndarray = None   # (celdas, 4) uint32, o None si solo se cargaron obstáculos
+    palette: object = None      # la paleta del mundo (para traducir a los valores de 32 bits)
 
     def __post_init__(self):
         self.offset = np.concatenate([[0], np.cumsum(self.col_len, dtype=np.int64)[:-1]])
+
+    @property
+    def obstacles(self) -> np.ndarray:
+        """Valores de 32 bits de las celdas (ver ``cell``), a través de la paleta."""
+        return self.palette.lut[self.cells]
 
     @property
     def cell_count(self) -> int:
@@ -42,11 +48,12 @@ class ChunkData:
     # --- Bloques binarios ---
 
     def to_blobs(self) -> Dict[str, bytes]:
-        obst_palette, obst_index = np.unique(self.obstacles, return_inverse=True)
+        # Los índices globales que usa el chunk, y para cada celda cuál de ellos (1 o 2 bytes)
+        obst_palette, obst_index = np.unique(self.cells, return_inverse=True)
         blobs = {
             "col_start": self.col_start.astype("<i2").tobytes(),
             "col_len": self.col_len.astype(np.uint8).tobytes(),
-            "obst_palette": obst_palette.astype("<u4").tobytes(),
+            "obst_palette": obst_palette.astype("<u2").tobytes(),
             "obst_index": _index_bytes(obst_index, len(obst_palette)),
         }
         if self.visual is not None:
@@ -60,13 +67,13 @@ class ChunkData:
         col_start = np.frombuffer(blobs["col_start"], "<i2").astype(np.int16)
         col_len = np.frombuffer(blobs["col_len"], np.uint8)
         cells = int(col_len.sum(dtype=np.int64))
-        obstacles = (np.frombuffer(blobs["obst_palette"], "<u4")
-                     [_read_index(blobs["obst_index"], cells)].astype(np.uint32))
+        ids = (np.frombuffer(blobs["obst_palette"], "<u2")
+               [_read_index(blobs["obst_index"], cells)].astype(np.uint16))
         visual = None
         if blobs.get("vis_palette") is not None:
             palette = np.frombuffer(blobs["vis_palette"], "<u4").reshape(-1, 4)
             visual = palette[_read_index(blobs["vis_index"], cells)].astype(np.uint32)
-        return cls(cx, cy, size, col_start, col_len, obstacles, visual)
+        return cls(cx, cy, size, col_start, col_len, ids, visual)
 
 
 def _index_bytes(index: np.ndarray, palette_size: int) -> bytes:

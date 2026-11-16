@@ -29,8 +29,13 @@ def levels(tmp_path_factory, shared_tileset):
 
 @pytest.fixture
 def viewer(levels):
+    import time
     glfw = pytest.importorskip("glfw")
-    if not glfw.init():
+    for _ in range(4):                     # el servidor gráfico de los tests a veces tarda en dejar
+        if glfw.init():
+            break
+        time.sleep(0.5)
+    else:
         pytest.skip("sin pantalla para OpenGL")
     from engine.viewer import Viewer
     from tests.conftest import retrying_viewer
