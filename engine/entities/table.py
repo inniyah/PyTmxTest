@@ -59,7 +59,7 @@ class ActorTable:
         self.jump = grow(g("jump"), fill=False, dtype=bool)
         self.grounded = grow(g("grounded"), fill=False, dtype=bool)
         self.support = grow(g("support"), fill=-1e9)
-        for name in ("radius", "height", "step", "mass", "max_speed", "walk_speed",
+        for name in ("radius", "bound", "height", "step", "mass", "max_speed", "walk_speed",
                      "grip_ground", "grip_air", "jump_speed"):
             setattr(self, name, grow(g(name)))
         self.tint = grow(g("tint"), (3,), fill=1.0)
@@ -113,6 +113,7 @@ class ActorTable:
         for name in ("radius", "height", "step", "mass", "max_speed", "walk_speed",
                      "grip_ground", "grip_air", "jump_speed"):
             getattr(self, name)[row] = getattr(t, name)
+        self.bound[row] = t.bound_radius if t.bound_radius is not None else t.radius
         self.tint[row] = t.tint
         # Ropa: un color al azar de la paleta de cada parte (sin paleta, el de la hoja)
         self.outfit[row] = -1.0
@@ -178,7 +179,8 @@ class ActorTable:
                        self.grip_air[rows].copy(), self.jump_speed[rows].copy(),
                        vel=self.vel[rows].copy(), grounded=self.grounded[rows].copy(),
                        wish=self.wish[rows].copy(), jump=self.jump[rows].copy(),
-                       support=self.support[rows].copy(), mass=self.mass[rows].copy())
+                       support=self.support[rows].copy(), mass=self.mass[rows].copy(),
+                       bound=self.bound[rows].copy())
 
     def store(self, rows: np.ndarray, w: Walkers):
         """Devuelve a la tabla el estado que cambia la física."""

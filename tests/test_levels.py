@@ -427,13 +427,14 @@ def test_silhouette_is_not_drawn_over_other_characters_or_indoors(world, viewer_
 
 def test_nothing_of_the_player_shows_through_a_wall_in_front(world, viewer_factory, tmp_path):
     """El caso de la captura: en la planta 1, pegado por dentro a la pared sur (que lo tapa), de
-    perfil y andando. El brazo del lado de la cámara sobresale de su cilindro y llegaba al otro
-    lado de la pared; ahora lo que sobresale por delante cuenta como si estuviera en su cilindro."""
+    perfil y andando: lo más cerca que la física lo deja (su cilindro envolvente tocándola). El
+    brazo del lado de la cámara llegaba al otro lado de la pared; ahora lo que sobresale por
+    delante cuenta como si estuviera en su cilindro."""
     from PIL import Image
     v = viewer_factory(world, 480, 320, visible=False, spawn=(18.35, 9.9), spawn_level=1)
     try:
         t, row = v.table, v.table.row(v.player_handle)
-        t.pos[row] = (36.7, 3.0, 19.8)
+        t.pos[row] = (36.7, 3.0, 20.0 - float(t.bound[row]))      # tocándola con su envolvente
         t.support[row] = 3.0
         _green_player(v)
         v.silhouette = False
@@ -467,5 +468,31 @@ def test_room_blocks_are_reused_when_moving(world, viewer_factory):
         fresh = v.facade_cut_mask(20, 6, 0, Y)
         assert fresh["origin"] == masks[-1]["origin"] and np.array_equal(fresh["mask"], masks[-1]["mask"])
         assert per_cell < 0.008                                       # sin repetir lo caro
+    finally:
+        v.close()
+
+
+def test_nothing_shows_past_a_wall_beside_the_player(world, viewer_factory, tmp_path):
+    """El caso de la pared oeste de la planta 1, con física: andando contra ella y rozándola a lo
+    largo, su cilindro envolvente lo mantiene lo bastante lejos como para que ningún brazo asome."""
+    from PIL import Image
+    v = viewer_factory(world, 480, 320, visible=False, spawn=(14.5, 6.75), spawn_level=1)
+    try:
+        t, row = v.table, v.table.row(v.player_handle)
+        _green_player(v)
+        v.silhouette = False
+        g = v.renderer.geo
+        for _ in range(120):
+            v.update(1 / 60, wish=(-1.0, 0.0))
+        assert t.pos[row, 0] - 28.0 == pytest.approx(float(t.bound[row]), abs=0.01)
+        for k in range(96):
+            v.update(1 / 60, wish=(-0.3, 1.0 if (k // 32) % 2 == 0 else -1.0))
+            if k % 12 == 0:
+                v.camera.zoom = 2.0
+                v._center_on_player(1.0)
+                wall_px = int((28.0 * g.tile_w / g.cell_w - v.camera.x) * v.camera.zoom)
+                v.screenshot(tmp_path / "w.png")
+                img = np.asarray(Image.open(tmp_path / "w.png").convert("RGB")).astype(int)
+                assert _green(img[:, :max(0, wall_px - 2)]) == 0
     finally:
         v.close()

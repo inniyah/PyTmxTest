@@ -531,3 +531,30 @@ def test_smoothing_doubles_frames_and_speed_but_not_the_cycle():
     walk = layout["animations"]["andar"]
     assert len(walk["cols"]) == 8 and walk["fps"] == 2 * TIMING["andar"][0]
     assert len(walk["cols"]) / walk["fps"] == pytest.approx(4 / TIMING["andar"][0])    # mismo ciclo
+
+
+# --- Cilindro envolvente ---------------------------------------------------------------------
+
+def test_maniqui_sheet_has_its_lateral_reach():
+    from engine.viewer import ASSETS
+    layout = json.loads((ASSETS / "actors/sheets/maniqui.json").read_text(encoding="utf-8"))
+    assert 0.30 < layout["reach"] < 0.45            # hombros y brazos a los lados, no las zancadas
+
+
+def test_bound_radius_from_the_sheet_scaled_overridden_or_default(tmp_path):
+    from engine.entities import load_types
+    from engine.entities.types import BOUND_MARGIN
+    from engine.viewer import ASSETS
+    reach = json.loads((ASSETS / "actors/sheets/maniqui.json").read_text(encoding="utf-8"))["reach"]
+    types = load_types()
+    assert types["persona"].bound_radius == pytest.approx(reach * 1.7 / 1.7, abs=1e-3)
+    assert types["niño"].bound_radius == pytest.approx(max(reach * 1.2 / 1.7, types["niño"].radius), abs=1e-3)
+    assert all(t.bound_radius >= t.radius for t in types.values())
+    data = json.loads((ASSETS / "actors/types.json").read_text(encoding="utf-8"))
+    data["persona"]["bound_radius"] = 0.5                        # a mano
+    data["niño"]["sheet"] = "people/guy.png"                     # una hoja sin alcance
+    (tmp_path / "actors").mkdir()
+    (tmp_path / "actors/types.json").write_text(json.dumps(data), encoding="utf-8")
+    custom = load_types(tmp_path / "actors/types.json")
+    assert custom["persona"].bound_radius == 0.5
+    assert custom["niño"].bound_radius == pytest.approx(custom["niño"].radius + BOUND_MARGIN)

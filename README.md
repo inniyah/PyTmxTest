@@ -325,7 +325,7 @@ El `.cworld` es una base de datos SQLite con:
 ## Personajes y NPC
 
 Los tipos de personaje están en `assets/actors/types.json` (persona, niño, perro, guardia, y los generados maniqui, soldado y enemigo):
-radio y altura del cilindro, escalón máximo, masa, velocidades, hoja de sprites, tinte y, para
+radio y altura del cilindro (y un radio envolvente, ver abajo), escalón máximo, masa, velocidades, hoja de sprites, tinte y, para
 la navegación, ajustes de los costes por material (`material_costs`) y de la pendiente
 (`uphill`, `downhill`). Lo que un tipo no indica se toma de `defecto`.
 
@@ -424,6 +424,15 @@ Un grafista puede sustituir los PNG respetando la disposición del `.json`; para
 diferencia.
 
 ### Simulación por zonas
+
+**Dos cilindros por personaje.** El sólido (`radius`) es para los choques entre personajes y para
+apoyarse en el suelo: en una multitud se tocan sin separarse de más. El envolvente
+(`bound_radius`), algo mayor, es la distancia mínima a paredes y macizos: lo que sobresale a los
+lados (hombros, brazos, un fusil) nunca llega al otro lado de una pared. La navegación, el paseo
+de los NPC y el orden por profundidad de los sprites usan el envolvente; la sombra, el sólido. Si
+no se pone en `types.json`, sale de la hoja: el generador escribe en su `.json` el alcance lateral
+del personaje (`reach`: hasta dónde llega a los lados de hacia donde mira, quieto y al moverse), y
+se escala a la altura del tipo; con hojas sin ese dato, el sólido más 8 cm.
 
 La simulación tiene **niveles de detalle** alrededor del jugador: a menos de 60 m, física y
 comportamiento completos a 60 Hz; hasta 160 m, física a 30 Hz; más lejos, sin física (los NPC

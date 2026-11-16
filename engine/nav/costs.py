@@ -37,7 +37,7 @@ class CostProfile:
         overrides = dict(getattr(actor_type, "material_costs", None) or {})
         for name, value in overrides.items():
             costs[materials.code(name)] = float(value)
-        return cls(actor_type.name, costs, float(actor_type.radius),
+        return cls(actor_type.name, costs, float(actor_type.bound_radius or actor_type.radius),   # contra paredes
                    float(getattr(actor_type, "uphill", UPHILL) or UPHILL),
                    float(getattr(actor_type, "downhill", DOWNHILL) or DOWNHILL), overrides)
 

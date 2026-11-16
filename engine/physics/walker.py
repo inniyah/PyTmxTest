@@ -88,6 +88,7 @@ class Walkers:
     jump: np.ndarray = None                          # (n,) bool, petición de salto
     support: np.ndarray = None                       # (n,) altura del suelo bajo los pies
     mass: np.ndarray = None                          # (n,) kg; inf = inamovible
+    bound: np.ndarray = None                         # (n,) radio contra paredes y macizos (≥ radius)
 
     def __post_init__(self):
         n = len(self.pos)
@@ -98,6 +99,7 @@ class Walkers:
         self.wish = np.zeros((n, 2)) if self.wish is None else self.wish
         self.jump = np.zeros(n, bool) if self.jump is None else self.jump
         self.support = np.full(n, NEG_INF) if self.support is None else self.support
+        self.bound = np.asarray(self.radius, float).copy() if self.bound is None else np.asarray(self.bound, float)
 
     @classmethod
     def create(cls, positions, radius=0.25, height=1.7, step=0.3, max_speed=4.0,
@@ -198,8 +200,8 @@ class WalkerPhysics:
         escalón en el suelo, casi nada en el aire): a esos se sube."""
         cw, ch = self.p.cell_w, self.p.cell_h
         n = len(x)
-        c0x = np.floor((x - w.radius) / cw).astype(np.int64)
-        c0y = np.floor((z - w.radius) / cw).astype(np.int64)
+        c0x = np.floor((x - w.bound) / cw).astype(np.int64)
+        c0y = np.floor((z - w.bound) / cw).astype(np.int64)
         y = w.pos[:, 1]
         lo = np.floor((y + margin) / ch).astype(np.int64)
         hi = np.floor((y + w.height - 1e-3) / ch).astype(np.int64)
@@ -228,7 +230,7 @@ class WalkerPhysics:
             t = np.clip(((x[:, None] - ax) * dx + (z[:, None] - az) * dz) / length2, 0, 1)
             ox, oz = x[:, None] - (ax + t * dx), z[:, None] - (az + t * dz)
             dist = np.sqrt(ox * ox + oz * oz)
-            depth = np.where(np.isfinite(dist), w.radius[:, None] - dist, -np.inf)
+            depth = np.where(np.isfinite(dist), w.bound[:, None] - dist, -np.inf)
             k = np.argmax(depth, axis=1)
             d = depth[rows_all, k]
             hit = d > 1e-9
@@ -249,6 +251,9 @@ class WalkerPhysics:
 
         Devuelve "valid", y las superficies y el techo bajo su centro ("surf", "ceil")."""
         P = len(FOOTPRINT)
+        # Solo suelos y techos: con el radio sólido (el envolvente abarcaría más rampa, sus puntos
+        # altos quedarían por encima del escalón y no se podría subir). Las paredes y lo macizo
+        # los llevan sus segmentos, con el envolvente
         r = w.radius[rows]
         px = (x[:, None] + FOOTPRINT[None, :, 0] * r[:, None]).ravel()
         pz = (z[:, None] + FOOTPRINT[None, :, 1] * r[:, None]).ravel()

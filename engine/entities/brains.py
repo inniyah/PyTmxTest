@@ -53,10 +53,10 @@ class WanderBrains:
             r = rows[walking]
             h = table.heading[r]
             dx, dz = np.cos(h), np.sin(h)
-            reach = table.radius[r] + LOOK_AHEAD
+            reach = table.bound[r] + LOOK_AHEAD
             x, y, z = table.pos[r, 0], table.pos[r, 1], table.pos[r, 2]
             ahead = self.physics.support(x + dx * reach, z + dz * reach, y + table.step[r] + 0.01)
-            near = table.radius[r] + LOOK_AHEAD_HIGH
+            near = table.bound[r] + LOOK_AHEAD_HIGH
             blocked_high = self.physics.support(x + dx * near, z + dz * near, y + table.height[r]) \
                 > y + table.step[r] + 1e-3
             drop = ahead < y - DROP_LIMIT

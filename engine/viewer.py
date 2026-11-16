@@ -651,7 +651,7 @@ class Viewer:
                 sheet, t.pos[sel], t.support[sel], t.height[sel], t.radius[sel],
                 sheet.row_of(t.facing[sel]), sheet.frame_cols(t.anim_time[sel], speed),
                 t.tint[sel], self.camera, r.show_depth, lights=r, cut=cut, max_level=r.max_level,
-                outfit=self.outfit_for(sheet, sel))
+                outfit=self.outfit_for(sheet, sel), bound=t.bound[sel])
 
     def outfit_for(self, sheet, rows):
         """Colores de ropa de esos personajes en el orden de las partes de su hoja (n, 6), o None."""
@@ -714,7 +714,7 @@ class Viewer:
         self.sprites.draw_silhouettes(
             sheet, t.pos[row:row + 1], t.height[row:row + 1], sheet.row_of(t.facing[row:row + 1]),
             sheet.frame_cols(t.anim_time[row:row + 1], np.hypot(*t.vel[row, [0, 2]])), self.camera,
-            lights=self.renderer, radius=t.radius[row:row + 1],
+            lights=self.renderer, radius=t.bound[row:row + 1],
             cut=cut, max_level=self.renderer.max_level)
 
     def visible_actors(self):

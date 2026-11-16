@@ -607,7 +607,7 @@ class SpriteRenderer:
         self.draw_calls += 1
 
     def draw_batch(self, sheet: SpriteSheet, feet, ground, body_h, radius, rows, cols, tint, camera,
-                   show_depth=False, lights=None, cut=None, max_level=1e9, outfit=None):
+                   show_depth=False, lights=None, cut=None, max_level=1e9, outfit=None, bound=None):
         """Todos los personajes de una hoja: sombras (sin escribir profundidad) y luego sprites.
 
         ``outfit``: (n, 6) colores empaquetados de las partes de ropa de la hoja, en su orden
@@ -629,7 +629,10 @@ class SpriteRenderer:
             with timed("sombras"):
                 self._draw(sv, None, True, camera, show_depth, lights, cut, max_level)
         glDepthMask(GL_TRUE)
-        verts = self.sprite_vertices(sheet, feet, body_h, rows, cols, tint, level, radius, outfit)
+        # El sprite se ordena con su cilindro envolvente (lo que la física mantiene libre de paredes);
+        # la sombra, con el sólido
+        verts = self.sprite_vertices(sheet, feet, body_h, rows, cols, tint, level,
+                                     radius if bound is None else bound, outfit)
         with timed("personajes"):
             self._draw(verts, sheet, False, camera, show_depth, lights, cut, max_level)
 

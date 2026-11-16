@@ -32,6 +32,7 @@ from .poses import DEFAULT_SMOOTHING, POSES, TIMING, animation, inbetween
 from .render import LIGHT, Frame, far_side, render_frame, view_dir
 
 DIRECTIONS = 8
+REACH_EXCLUDED = ("morir", "granada")   # animaciones que no cuentan para el alcance
 DEFAULT_PITCH = 30.0           # grados: inclinación de la cámara de los personajes (el mundo, ~46)
 CANVAS = (288, 176)            # lienzo de trabajo, antes de recortar (cabe alguien tendido)
 ANCHOR = (144, 132)            # pies en el lienzo de trabajo
@@ -268,6 +269,26 @@ def build_sheet(desc: dict, proj: Projection = None, progress=None, pitch=None):
         x += fw
     layers = cropped
     a = layers["alpha"]
+    # Alcance: hasta dónde llega a los lados (perpendicular a hacia dónde mira), quieto y al moverse.
+    # Las zancadas y lo que lleva por delante van en la dirección en la que mira (si mira a una pared
+    # que tiene delante, eso lo resuelve la profundidad); lo que atravesaría una pared de al lado es
+    # lo que sobresale a los lados. El motor lo usa como radio envolvente: la distancia mínima a las
+    # paredes. No cuentan morir ni lanzar
+    reach = 0.0
+    px, pz = layers["point"][..., 0], layers["point"][..., 2]
+    for name, e in layout_anims.items():
+        if name in REACH_EXCLUDED:
+            continue
+        for c in e["cols"]:
+            col = columns[c]
+            for row in range(DIRECTIONS):
+                sl = (slice(row * col["h"], (row + 1) * col["h"]), slice(col["x"], col["x"] + col["w"]))
+                body = a[sl]
+                if not body.any():
+                    continue
+                t = np.radians(row * 360.0 / DIRECTIONS)                   # hacia dónde mira (desde el este, horario)
+                d = np.abs(-np.sin(t) * px[sl] + np.cos(t) * pz[sl])
+                reach = max(reach, float(d[body].max()))
     pts = layers["point"][a]
     lo = np.floor((pts.min(0) - 0.05) * 20) / 20
     hi = np.ceil((pts.max(0) + 0.05) * 20) / 20
@@ -281,6 +302,7 @@ def build_sheet(desc: dict, proj: Projection = None, progress=None, pitch=None):
         "rows": DIRECTIONS,
         "anchor": columns[0]["anchor"],
         "columns": columns,
+        "reach": round(reach, 3),
         "ropa": list(desc.get("ropa", [])),
         "px_per_m": proj.sx,
         "pitch": round(pitch, 2),

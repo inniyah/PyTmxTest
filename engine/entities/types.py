@@ -29,13 +29,17 @@ class ActorType:
     # Ropa (opcional): para cada parte recoloreable de su hoja (zapatos, pantalones…), los colores
     # entre los que elige al aparecer ("#rrggbb"); sin paleta, la de la hoja
     ropa: Optional[Dict[str, list]] = None
+    # Radio envolvente (m): la distancia mínima a paredes y macizos, para que nada de su dibujo (un
+    # brazo) llegue al otro lado. Sin él: el alcance lateral de su hoja (generada), a su altura; o
+    # el sólido más BOUND_MARGIN. El sólido (radius) es para los choques entre personajes
+    bound_radius: Optional[float] = None
 
 
 def load_types(path=DEFAULT_TYPES) -> Dict[str, ActorType]:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     base = data.get("defecto", {})
     names = {f.name for f in fields(ActorType)} - {"name"}
-    optional = {"material_costs", "uphill", "downhill", "ropa"}
+    optional = {"material_costs", "uphill", "downhill", "ropa", "bound_radius"}
     types = {}
     for name, values in data.items():
         if name.startswith("_") or name == "defecto":
@@ -48,5 +52,22 @@ def load_types(path=DEFAULT_TYPES) -> Dict[str, ActorType]:
         if missing:
             raise ValueError(f"Tipo '{name}': faltan {sorted(missing)}")
         merged["tint"] = tuple(float(c) for c in merged["tint"])
+        if merged.get("bound_radius") is None:
+            merged["bound_radius"] = sheet_bound(Path(path).resolve().parents[1], merged)
+        merged["bound_radius"] = max(float(merged["bound_radius"]), float(merged["radius"]))
         types[name] = ActorType(name=name, **merged)
     return types
+
+
+BOUND_MARGIN = 0.08          # m: sin alcance en su hoja, el envolvente es el sólido más esto
+
+
+def sheet_bound(assets: Path, t: dict) -> float:
+    """Radio envolvente sacado de la hoja: su alcance lateral (``reach`` en su .json, a la altura
+    del modelo), escalado a la altura del tipo; si no lo tiene, el sólido más BOUND_MARGIN."""
+    meta = (assets / t["sheet"]).with_suffix(".json")
+    try:
+        layout = json.loads(meta.read_text(encoding="utf-8"))
+        return float(layout["reach"]) * float(t["height"]) / float(layout["height"])
+    except (OSError, KeyError, ValueError):
+        return float(t["radius"]) + BOUND_MARGIN

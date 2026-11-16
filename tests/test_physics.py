@@ -238,3 +238,39 @@ def test_body_stops_at_one_radius_from_floor_edges(phys):
         w.grounded[:] = True
         run(phys, w, (1, 0), 2)
         assert 0.24 < edge - w.pos[0, 0] < 0.27
+
+
+# --- Cilindro envolvente: la distancia a las paredes ------------------------------------------
+
+def test_walls_keep_the_bounding_radius(phys):
+    """Contra una pared, el personaje se queda a su radio envolvente (no al sólido)."""
+    w = walker(14, 5)
+    w.bound[:] = 0.36
+    run(phys, w, (0, -1), 2)                            # hacia la pared norte (z = 6)
+    assert abs(w.pos[0, 2] - (6 + 0.36)) < 0.01
+
+
+def test_characters_touch_at_their_solid_radius(phys):
+    """Entre personajes cuenta el sólido: en una multitud se tocan sin separarse de más."""
+    w = Walkers.create([[21.0, 0.0, 21.0], [21.3, 0.0, 21.0]])
+    w.grounded[:] = True
+    w.bound[:] = 0.36
+    for _ in range(int(1.0 / DT)):
+        w.wish[:] = ((1.0, 0.0), (-1.0, 0.0))           # el uno contra el otro
+        phys.step(w, DT)
+    gap = abs(w.pos[1, 0] - w.pos[0, 0])
+    assert gap == pytest.approx(0.5, abs=0.03)          # 0.25 + 0.25, no 0.36 + 0.36
+
+
+@pytest.mark.parametrize("start", [(5, 10), (20, 12)])
+def test_the_bounding_radius_does_not_change_climbing_ramps(phys, start):
+    """El envolvente es solo para paredes y macizos: para los suelos (el escalón al subir una
+    rampa) cuenta el sólido. Con el envolvente en la huella, la rampa quedaba por encima del
+    escalón y se subía mucho menos."""
+    tops = []
+    for bound in (0.25, 0.364):
+        w = walker(*start)
+        w.bound[:] = bound
+        track = run(phys, w, (0, -1), 1.5)
+        tops.append(track[:, 1].max())
+    assert tops[1] == pytest.approx(tops[0], abs=0.05) and tops[0] > 2.5
