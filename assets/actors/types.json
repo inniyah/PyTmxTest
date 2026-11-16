@@ -1,5 +1,5 @@
 {
-  "_comentario": "Tipos de personaje. Los valores que falten se toman de 'defecto'. Distancias en metros, velocidades en m/s, masa en kg; sheet es relativa a assets/; tint multiplica el color del sprite. Opcional, para la navegación: material_costs (coste por material, por nombre, sobre materials.json), uphill y downhill (cuánto cuesta subir y bajar).",
+  "_comentario": "Tipos de personaje. Los valores que falten se toman de 'defecto'. Distancias en metros, velocidades en m/s, masa en kg; sheet es relativa a assets/ (por defecto, el maniquí generado: anda y corre en 8 direcciones); tint multiplica el color del sprite. Opcional, para la navegación: material_costs (coste por material, por nombre, sobre materials.json), uphill y downhill (cuánto cuesta subir y bajar). ropa: para cada parte recoloreable de la hoja, los colores entre los que elige cada personaje al aparecer.",
   "defecto": {
     "radius": 0.25,
     "height": 1.7,
@@ -10,12 +10,58 @@
     "grip_ground": 14.0,
     "grip_air": 2.0,
     "jump_speed": 6.5,
-    "sheet": "people/guy.png",
+    "sheet": "actors/sheets/maniqui.png",
     "tint": [
       1.0,
       1.0,
       1.0
-    ]
+    ],
+    "ropa": {
+      "zapatos": [
+        "#3b2b22",
+        "#2a2a2e",
+        "#5a4030",
+        "#6b5b4b",
+        "#4a4038"
+      ],
+      "pantalones": [
+        "#46608f",
+        "#3e3e46",
+        "#5b4a3a",
+        "#6c7a4a",
+        "#7a6a58",
+        "#2f3b55",
+        "#8a7a64"
+      ],
+      "chaleco": [
+        "#b5583f",
+        "#4f7a5a",
+        "#c9a24a",
+        "#6a4a7a",
+        "#3f6a8a",
+        "#8a8a8a",
+        "#a33a4a",
+        "#d0c0a0"
+      ],
+      "mangas": [
+        "#e6dfcc",
+        "#c8d4e0",
+        "#d9c7a7",
+        "#9fb5c8",
+        "#efe9e1",
+        "#b8c8a8"
+      ],
+      "pelo": [
+        "#2b1d14",
+        "#5a3b26",
+        "#8a5a2b",
+        "#d8b46a",
+        "#1a1a1a",
+        "#9a9a9a",
+        "#a0522d",
+        "#e8d8a0"
+      ]
+    }
   },
   "persona": {},
   "niño": {
@@ -53,6 +99,27 @@
     },
     "uphill": 2.0
   },
+  "maniqui": {
+    "sheet": "actors/sheets/maniqui.png"
+  },
+  "soldado": {
+    "radius": 0.28,
+    "height": 1.75,
+    "mass": 80.0,
+    "max_speed": 2.2,
+    "walk_speed": 1.4,
+    "sheet": "actors/sheets/soldado.png",
+    "ropa": {}
+  },
+  "enemigo": {
+    "radius": 0.28,
+    "height": 1.75,
+    "mass": 80.0,
+    "max_speed": 2.0,
+    "walk_speed": 1.4,
+    "sheet": "actors/sheets/enemigo.png",
+    "ropa": {}
+  },
   "guardia": {
     "radius": 0.32,
     "height": 1.95,
@@ -63,6 +130,20 @@
       0.62,
       0.7,
       0.95
-    ]
+    ],
+    "ropa": {
+      "chaleco": [
+        "#2c3e66"
+      ],
+      "pantalones": [
+        "#2c3e66"
+      ],
+      "mangas": [
+        "#3a4f7a"
+      ],
+      "zapatos": [
+        "#1a1a1e"
+      ]
+    }
   }
 }

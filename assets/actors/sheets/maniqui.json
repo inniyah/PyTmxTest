@@ -1,0 +1,163 @@
+{
+  "_comentario": "Generado por tools.actors: no editar a mano. 'columns': x, ancho, alto y pies (anchor) de cada columna; las filas de una columna, una debajo de otra. 'px_per_m' = píxeles por metro en horizontal; 'pitch' = inclinación de la cámara; filas = direcciones desde el este en sentido horario.",
+  "frame": [
+    88,
+    95
+  ],
+  "cols": 9,
+  "rows": 8,
+  "anchor": [
+    25,
+    80
+  ],
+  "columns": [
+    {
+      "x": 0,
+      "w": 50,
+      "h": 86,
+      "anchor": [
+        25,
+        80
+      ]
+    },
+    {
+      "x": 50,
+      "w": 74,
+      "h": 91,
+      "anchor": [
+        37,
+        80
+      ]
+    },
+    {
+      "x": 124,
+      "w": 74,
+      "h": 91,
+      "anchor": [
+        37,
+        80
+      ]
+    },
+    {
+      "x": 198,
+      "w": 74,
+      "h": 91,
+      "anchor": [
+        37,
+        80
+      ]
+    },
+    {
+      "x": 272,
+      "w": 74,
+      "h": 91,
+      "anchor": [
+        37,
+        80
+      ]
+    },
+    {
+      "x": 346,
+      "w": 88,
+      "h": 95,
+      "anchor": [
+        44,
+        81
+      ]
+    },
+    {
+      "x": 434,
+      "w": 88,
+      "h": 95,
+      "anchor": [
+        44,
+        81
+      ]
+    },
+    {
+      "x": 522,
+      "w": 88,
+      "h": 95,
+      "anchor": [
+        44,
+        81
+      ]
+    },
+    {
+      "x": 610,
+      "w": 88,
+      "h": 95,
+      "anchor": [
+        44,
+        81
+      ]
+    }
+  ],
+  "ropa": [
+    "zapatos",
+    "pantalones",
+    "chaleco",
+    "mangas",
+    "pelo"
+  ],
+  "px_per_m": 64.0,
+  "pitch": 30.0,
+  "projection": {
+    "sx": 64.0,
+    "sy": 44.333333333333336,
+    "sz": 25.595861934073408
+  },
+  "height": 1.7,
+  "directions": 8,
+  "direction_rows": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "animations": {
+    "quieto": {
+      "cols": [
+        0
+      ]
+    },
+    "andar": {
+      "cols": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "fps": 8.0,
+      "speed": 1.4
+    },
+    "correr": {
+      "cols": [
+        5,
+        6,
+        7,
+        8
+      ],
+      "fps": 10.0,
+      "speed": 4.0
+    }
+  },
+  "position_range": [
+    [
+      -0.7,
+      0.7
+    ],
+    [
+      -0.05,
+      1.8
+    ],
+    [
+      -0.65,
+      0.7
+    ]
+  ]
+}

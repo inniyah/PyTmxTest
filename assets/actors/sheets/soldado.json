@@ -1,0 +1,252 @@
+{
+  "_comentario": "Generado por tools.actors: no editar a mano. 'columns': x, ancho, alto y pies (anchor) de cada columna; las filas de una columna, una debajo de otra. 'px_per_m' = píxeles por metro en horizontal; 'pitch' = inclinación de la cámara; filas = direcciones desde el este en sentido horario.",
+  "frame": [
+    230,
+    110
+  ],
+  "cols": 17,
+  "rows": 8,
+  "anchor": [
+    55,
+    82
+  ],
+  "columns": [
+    {
+      "x": 0,
+      "w": 110,
+      "h": 90,
+      "anchor": [
+        55,
+        82
+      ]
+    },
+    {
+      "x": 110,
+      "w": 110,
+      "h": 94,
+      "anchor": [
+        55,
+        83
+      ]
+    },
+    {
+      "x": 220,
+      "w": 110,
+      "h": 94,
+      "anchor": [
+        55,
+        83
+      ]
+    },
+    {
+      "x": 330,
+      "w": 110,
+      "h": 94,
+      "anchor": [
+        55,
+        83
+      ]
+    },
+    {
+      "x": 440,
+      "w": 110,
+      "h": 94,
+      "anchor": [
+        55,
+        83
+      ]
+    },
+    {
+      "x": 550,
+      "w": 114,
+      "h": 81,
+      "anchor": [
+        57,
+        69
+      ]
+    },
+    {
+      "x": 664,
+      "w": 117,
+      "h": 85,
+      "anchor": [
+        58,
+        74
+      ]
+    },
+    {
+      "x": 781,
+      "w": 117,
+      "h": 85,
+      "anchor": [
+        58,
+        74
+      ]
+    },
+    {
+      "x": 898,
+      "w": 117,
+      "h": 85,
+      "anchor": [
+        58,
+        74
+      ]
+    },
+    {
+      "x": 1015,
+      "w": 117,
+      "h": 85,
+      "anchor": [
+        58,
+        74
+      ]
+    },
+    {
+      "x": 1132,
+      "w": 116,
+      "h": 110,
+      "anchor": [
+        58,
+        100
+      ]
+    },
+    {
+      "x": 1248,
+      "w": 116,
+      "h": 110,
+      "anchor": [
+        58,
+        100
+      ]
+    },
+    {
+      "x": 1364,
+      "w": 116,
+      "h": 110,
+      "anchor": [
+        58,
+        100
+      ]
+    },
+    {
+      "x": 1480,
+      "w": 230,
+      "h": 105,
+      "anchor": [
+        115,
+        85
+      ]
+    },
+    {
+      "x": 1710,
+      "w": 230,
+      "h": 105,
+      "anchor": [
+        115,
+        85
+      ]
+    },
+    {
+      "x": 1940,
+      "w": 230,
+      "h": 105,
+      "anchor": [
+        115,
+        85
+      ]
+    },
+    {
+      "x": 2170,
+      "w": 230,
+      "h": 105,
+      "anchor": [
+        115,
+        85
+      ]
+    }
+  ],
+  "px_per_m": 64.0,
+  "pitch": 30.0,
+  "projection": {
+    "sx": 64.0,
+    "sy": 44.333333333333336,
+    "sz": 25.595861934073408
+  },
+  "height": 1.75,
+  "directions": 8,
+  "direction_rows": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "animations": {
+    "quieto": {
+      "cols": [
+        0
+      ]
+    },
+    "andar": {
+      "cols": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "fps": 8.0,
+      "speed": 1.4
+    },
+    "agachado": {
+      "cols": [
+        5
+      ]
+    },
+    "andar_agachado": {
+      "cols": [
+        6,
+        7,
+        8,
+        9
+      ],
+      "fps": 7.0,
+      "speed": 0.9
+    },
+    "granada": {
+      "cols": [
+        10,
+        11,
+        12
+      ],
+      "fps": 10.0,
+      "loop": false
+    },
+    "morir": {
+      "cols": [
+        13,
+        14,
+        15,
+        16
+      ],
+      "fps": 8.0,
+      "loop": false
+    }
+  },
+  "position_range": [
+    [
+      -1.85,
+      1.85
+    ],
+    [
+      -0.15,
+      2.05
+    ],
+    [
+      -1.15,
+      1.15
+    ]
+  ]
+}

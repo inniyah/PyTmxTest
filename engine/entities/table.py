@@ -20,11 +20,24 @@ from .types import ActorType
 GEN_SHIFT = 32
 
 
+def pack_rgb(color) -> float:
+    """"#rrggbb" (o (r, g, b) de 0 a 255) -> un número exacto en float32 (24 bits)."""
+    if isinstance(color, str):
+        color = color.lstrip("#")
+        r, g, b = int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16)
+    else:
+        r, g, b = (int(c) for c in color)
+    return float((r << 16) | (g << 8) | b)
+
+
 class ActorTable:
-    def __init__(self, types: Dict[str, ActorType], capacity: int = 64):
+    def __init__(self, types: Dict[str, ActorType], capacity: int = 64, rng=None):
         self.types = types
         self.type_names: List[str] = list(types)
         self.type_index = {name: i for i, name in enumerate(self.type_names)}
+        # Partes de ropa de todos los tipos (columnas de ``outfit``) y el azar para elegirlas
+        self.outfit_names: List[str] = sorted({p for t in types.values() for p in (t.ropa or {})})
+        self.rng = rng if rng is not None else np.random.default_rng()
         self._alloc(capacity)
 
     # --- Almacenamiento ---
@@ -50,6 +63,8 @@ class ActorTable:
                      "grip_ground", "grip_air", "jump_speed"):
             setattr(self, name, grow(g(name)))
         self.tint = grow(g("tint"), (3,), fill=1.0)
+        # Color de cada parte de ropa (RGB empaquetado en 24 bits; -1 = el de la hoja)
+        self.outfit = grow(g("outfit"), (max(1, len(self.outfit_names)),), fill=-1.0, dtype=np.float32)
         self.facing = grow(g("facing"), fill=1, dtype=np.int32)
         self.anim_time = grow(g("anim_time"))
         # Comportamiento (cerebro de paseo): estado, temporizador, rumbo
@@ -68,6 +83,17 @@ class ActorTable:
         self.capacity = capacity
 
     # --- Altas y bajas ---
+
+    def outfit_index(self, part: str) -> int:
+        """Columna de ``outfit`` de una parte de ropa (por su nombre)."""
+        return self.outfit_names.index(part)
+
+    def set_outfit(self, handle: int, **colors):
+        """Viste a un personaje: ``set_outfit(h, chaleco="#a03020", pelo="#202020")``; None
+        vuelve al color de la hoja."""
+        row = self.row(handle)
+        for part, color in colors.items():
+            self.outfit[row, self.outfit_index(part)] = -1.0 if color is None else pack_rgb(color)
 
     def spawn(self, type_name: str, pos, brain: int = 1) -> int:
         free = np.nonzero(~self.alive)[0]
@@ -88,6 +114,11 @@ class ActorTable:
                      "grip_ground", "grip_air", "jump_speed"):
             getattr(self, name)[row] = getattr(t, name)
         self.tint[row] = t.tint
+        # Ropa: un color al azar de la paleta de cada parte (sin paleta, el de la hoja)
+        self.outfit[row] = -1.0
+        for part, palette in (t.ropa or {}).items():
+            if palette:
+                self.outfit[row, self.outfit_index(part)] = pack_rgb(palette[int(self.rng.integers(len(palette)))])
         self.facing[row] = 1
         self.anim_time[row] = 0
         self.brain[row] = brain

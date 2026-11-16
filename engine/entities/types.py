@@ -26,13 +26,16 @@ class ActorType:
     material_costs: Optional[Dict[str, float]] = None
     uphill: Optional[float] = None
     downhill: Optional[float] = None
+    # Ropa (opcional): para cada parte recoloreable de su hoja (zapatos, pantalones…), los colores
+    # entre los que elige al aparecer ("#rrggbb"); sin paleta, la de la hoja
+    ropa: Optional[Dict[str, list]] = None
 
 
 def load_types(path=DEFAULT_TYPES) -> Dict[str, ActorType]:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     base = data.get("defecto", {})
     names = {f.name for f in fields(ActorType)} - {"name"}
-    optional = {"material_costs", "uphill", "downhill"}
+    optional = {"material_costs", "uphill", "downhill", "ropa"}
     types = {}
     for name, values in data.items():
         if name.startswith("_") or name == "defecto":

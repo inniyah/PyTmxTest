@@ -1,0 +1,66 @@
+{
+  "_comentario": "El personaje de base: las proporciones del soldado, con pelo corto, andar y correr. 'ropa': los materiales que el juego puede recolorear por personaje, en orden (su número va en el alfa del albedo: 254 el primero, 253 el segundo…); sus colores aquí son los de por defecto. Ver soldado.json para el resto del formato.",
+  "altura": 1.7,
+  "proporciones": {
+    "cabeza": 0.62,
+    "piernas": 1.3,
+    "brazos": 1.15
+  },
+  "materiales": {
+    "piel": {
+      "luz": "#f2c9a0",
+      "sombra": "#c99a74"
+    },
+    "zapatos": {
+      "luz": "#4b3a2f",
+      "sombra": "#33271f"
+    },
+    "pantalones": {
+      "luz": "#46608f",
+      "sombra": "#31456b"
+    },
+    "chaleco": {
+      "luz": "#b5583f",
+      "sombra": "#8a3f2c"
+    },
+    "mangas": {
+      "luz": "#e6dfcc",
+      "sombra": "#b9b19c"
+    },
+    "pelo": {
+      "luz": "#5a3b26",
+      "sombra": "#3d2718"
+    }
+  },
+  "contorno": "#3a2a24",
+  "ojos": "#3a2a24",
+  "partes": {
+    "cabeza": "piel",
+    "oreja_d": "piel",
+    "oreja_i": "piel",
+    "mano_d": "piel",
+    "mano_i": "piel",
+    "torso": "chaleco",
+    "brazo_d": "mangas",
+    "brazo_i": "mangas",
+    "pierna_d": "pantalones",
+    "pierna_i": "pantalones",
+    "bota_d": "zapatos",
+    "bota_i": "zapatos",
+    "pelo": "pelo"
+  },
+  "equipo": [
+    "pelo"
+  ],
+  "ropa": [
+    "zapatos",
+    "pantalones",
+    "chaleco",
+    "mangas",
+    "pelo"
+  ],
+  "animaciones": [
+    "andar",
+    "correr"
+  ]
+}

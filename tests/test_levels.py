@@ -156,15 +156,17 @@ def test_covered_detection(world, viewer_factory):
 
 @pytest.mark.parametrize("mode,visible", [("no", False), ("círculo", True), ("planta", True)])
 def test_player_inside_the_building(world, viewer_factory, tmp_path, mode, visible):
+    from PIL import Image
+
     from engine.viewer import CUT_MODES
     v = viewer_factory(world, 480, 320, visible=False, spawn=(17.5, 6.5), spawn_level=0)
     try:
-        v.renderer.lighting.enabled = False
+        _green_player(v)                           # verde puro: no depende de cuánta piel enseñe
         v.cut_mode = CUT_MODES.index(mode)
         v._center_on_player(1.0)
         v.screenshot(tmp_path / "inside.png")
-        skin = _skin_pixels(tmp_path / "inside.png")
-        assert (skin > 200) if visible else (skin < 20), f"{skin} píxeles de piel con modo {mode}"
+        seen = _green(np.asarray(Image.open(tmp_path / "inside.png").convert("RGB")).astype(int))
+        assert (seen > 200) if visible else (seen < 20), f"{seen} píxeles del jugador con modo {mode}"
     finally:
         v.close()
 
