@@ -49,6 +49,8 @@ OCCLUSION_START = 0.35       # m: el rayo de la silueta empieza fuera de su prop
 OCCLUSION_STEP = 0.08        # ...y avanza en pasos más finos que una pared (16 cm)
 WALL_BAND = 0.16             # m: grosor de una pared fina, a cada lado de su borde
 SLAB = 0.12                  # m: justo encima de un suelo cuenta como chocar con él
+ROOM_TILE = 16               # celdas: bloques de la ventana de la habitación, que se guardan
+ROOM_TILE_CACHE = 400        # bloques guardados como mucho (luego se vacía)
 MAX_ROOM_CELLS = 1200        # una "habitación" más grande que esto se corta ahí
 HOLE_SEARCH = 3              # celdas: bajo un agujero, hasta dónde se busca el techo de la habitación
 ROOM_OPEN_EDGES = 2          # una habitación puede tener tantos bordes abiertos (puertas) ...
@@ -381,7 +383,10 @@ class Viewer:
         dos plantas con al menos 1 m de hueco. Con techo, si lo tienen al menos 3 de los 4."""
         g, v, phys = self.renderer.geo, self.view, self.sim.physics
         cxs, cys = xs.ravel(), ys.ravel()
-        starts = np.array([v.column(int(x), int(y))[0] for x, y in zip(cxs, cys)])
+        # Dónde empieza cada columna, de una vez: "por debajo del tramo guardado" es lo que hay
+        # bajo su inicio (vectorizado; antes, una llamada por celda)
+        def below_start(level):
+            return v._locate(cxs, cys, level)[1]
         votes = np.zeros(cxs.size, int)
         floors = np.zeros(cxs.size)
         for u, w in ((0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)):
@@ -391,12 +396,40 @@ class Viewer:
             here = v.cells(cxs, cys, np.floor((floor + 0.1) / g.cell_h).astype(int))
             buried = C.fill_contains(C.fill(here), u, w)
             ceiling = phys.ceiling(px, pz, floor)
-            ok = ((starts <= level) & ~buried & (floor > feet - below) & (floor < feet + 1.0)
+            ok = (~below_start(level) & ~buried & (floor > feet - below) & (floor < feet + 1.0)
                   & (ceiling - floor >= 1.0) & (ceiling <= floor + 2 * g.cell_h))
             votes += ok
             floors = np.maximum(floors, np.where(ok, floor, -1e9))
         roofed = (votes >= 3).reshape(xs.shape)
         return (roofed, floors.reshape(xs.shape)) if heights else roofed
+
+    def _room_tiles(self, tiles, level: int, feet: float):
+        """Bloques de ROOM_TILE × ROOM_TILE celdas para el cálculo de la habitación: con techo,
+        paredes norte y oeste, macizo y transitable. Se guardan (el mundo no cambia), por planta y
+        altura de los pies (a cuartos de metro); los que falten se calculan juntos, en una sola
+        pasada vectorizada."""
+        fk = round(feet * 4) / 4
+        cache = self.__dict__.setdefault("_room_tile_cache", {})
+        missing = [t for t in tiles if (t[0], t[1], level, fk) not in cache]
+        if missing:
+            if len(cache) + len(missing) > ROOM_TILE_CACHE:
+                cache.clear()
+                missing = list(tiles)
+            v, g, phys = self.view, self.renderer.geo, self.sim.physics
+            m, T = len(missing), ROOM_TILE
+            jj, ii = np.mgrid[0:T, 0:T]
+            xs = np.stack([tx * T + ii for tx, _ty in missing])          # (m, T, T)
+            ys = np.stack([ty * T + jj for _tx, ty in missing])
+            roofed = self.roofed_cells(xs, ys, feet)
+            floor_h = phys.support((xs.ravel() + 0.5) * g.cell_w, (ys.ravel() + 0.5) * g.cell_w,
+                                   np.full(xs.size, feet + 1.6)).reshape(xs.shape)
+            cells = v.cells(xs, ys, level)
+            solid = C.fill(cells) == C.FILLS.index("solid")
+            walkable = ~solid & (np.abs(floor_h - feet) < STEP_UP)
+            wn, ww = C.wall_n(cells) != 0, C.wall_w(cells) != 0
+            for k in range(m):
+                cache[(missing[k][0], missing[k][1], level, fk)] = (roofed[k], wn[k], ww[k], solid[k], walkable[k])
+        return [cache[(tx, ty, level, fk)] for tx, ty in tiles]
 
     @staticmethod
     def fill_holes(region: np.ndarray) -> np.ndarray:
@@ -421,19 +454,19 @@ class Viewer:
         paredes, y vale si su celda queda dentro. Solo es un interior si la región está cerrada:
         como mucho ROOM_OPEN_EDGES bordes, o la fracción ROOM_OPEN_FRACTION de su contorno, dan
         al exterior sin pared en medio (bajo un balcón o un puente, está abierta: exterior)."""
-        v = self.view
         n = 2 * half
-        x0, y0 = cx - half, cy - half
-        ys, xs = np.mgrid[y0:y0 + n, x0:x0 + n]
+        # Ventana anclada a bloques de ROOM_TILE celdas (no centrada en él), hecha de bloques que se
+        # guardan por separado: al moverse solo se calculan los nuevos (el mundo no cambia)
+        x0 = (cx - half) - (cx - half) % ROOM_TILE
+        y0 = (cy - half) - (cy - half) % ROOM_TILE
+        sx, sy = cx - x0, cy - y0                       # su celda en la ventana
         empty = np.zeros((n, n), bool)
-        roofed = self.roofed_cells(xs, ys, feet)
-        g, phys = self.renderer.geo, self.sim.physics
-        floor_h = phys.support((xs.ravel() + 0.5) * g.cell_w, (ys.ravel() + 0.5) * g.cell_w,
-                               np.full(xs.size, feet + 1.6)).reshape(xs.shape)
-        cells = v.cells(xs, ys, level)
-        wall_n, wall_w = C.wall_n(cells) != 0, C.wall_w(cells) != 0
-        solid = C.fill(cells) == C.FILLS.index("solid")
-        walkable = ~solid & (np.abs(floor_h - feet) < STEP_UP)
+        k = n // ROOM_TILE
+        tiles = [(x0 // ROOM_TILE + i, y0 // ROOM_TILE + j) for j in range(k) for i in range(k)]
+        got = self._room_tiles(tiles, level, feet)
+        blocks = [got[j * k:(j + 1) * k] for j in range(k)]
+        roofed, wall_n, wall_w, solid, walkable = (np.block([[b[f] for b in row] for row in blocks])
+                                                   for f in range(5))
 
         def neighbours(j, i):
             """Vecinas a las que se pasa sin cruzar una pared: (fila, columna)."""
@@ -445,7 +478,7 @@ class Viewer:
                     yield a, b
 
         # Por dónde empezar: su celda o, bajo un agujero, la celda con techo más cercana
-        seed = (half, half)
+        seed = (sy, sx)
         if not roofed[seed]:
             seen, frontier, seed = {seed}, [seed], None
             for _ in range(HOLE_SEARCH):
@@ -477,7 +510,7 @@ class Viewer:
                 if walkable[a] and not roofed[a]:
                     grown[a] = True
         region = self.fill_holes(grown)
-        if not region[half, half]:
+        if not region[sy, sx]:
             return x0, y0, empty
         # ¿Cerrada? Bordes del contorno que dan fuera sin pared en medio (a celdas transitables)
         edges = opened = 0

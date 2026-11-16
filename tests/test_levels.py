@@ -449,3 +449,23 @@ def test_nothing_of_the_player_shows_through_a_wall_in_front(world, viewer_facto
                 assert seen == 0, f"orientación {facing}: {seen} píxeles a través de la pared"
     finally:
         v.close()
+
+
+def test_room_blocks_are_reused_when_moving(world, viewer_factory):
+    """El cálculo de la habitación (techo en cada celda, lo caro) se guarda por bloques: al andar
+    por el edificio, cambiar de celda no lo repite, y el resultado es el mismo que calculado de cero."""
+    import time
+    v = viewer_factory(world, 320, 200, visible=False, spawn=(15.5, 6.5), spawn_level=0)
+    try:
+        Y = float(v.player.pos[1])
+        first = v.facade_cut_mask(15, 6, 0, Y)
+        t0 = time.perf_counter()
+        masks = [v.facade_cut_mask(cx, 6, 0, Y) for cx in range(16, 21)]
+        per_cell = (time.perf_counter() - t0) / 5
+        assert first is not None and all(m is not None for m in masks)
+        v._room_tile_cache.clear()                                    # de cero, sin nada guardado
+        fresh = v.facade_cut_mask(20, 6, 0, Y)
+        assert fresh["origin"] == masks[-1]["origin"] and np.array_equal(fresh["mask"], masks[-1]["mask"])
+        assert per_cell < 0.008                                       # sin repetir lo caro
+    finally:
+        v.close()
