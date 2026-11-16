@@ -2,9 +2,9 @@
   "_comentario": "Generado por tools.actors: no editar a mano. 'columns': x, ancho, alto y pies (anchor) de cada columna; las filas de una columna, una debajo de otra. 'px_per_m' = píxeles por metro en horizontal; 'pitch' = inclinación de la cámara; filas = direcciones desde el este en sentido horario.",
   "frame": [
     88,
-    95
+    96
   ],
-  "cols": 9,
+  "cols": 17,
   "rows": 8,
   "anchor": [
     25,
@@ -58,38 +58,110 @@
     },
     {
       "x": 346,
-      "w": 88,
-      "h": 95,
+      "w": 74,
+      "h": 91,
       "anchor": [
-        44,
-        81
+        37,
+        80
       ]
     },
     {
-      "x": 434,
-      "w": 88,
-      "h": 95,
+      "x": 420,
+      "w": 74,
+      "h": 91,
       "anchor": [
-        44,
-        81
+        37,
+        80
       ]
     },
     {
-      "x": 522,
-      "w": 88,
-      "h": 95,
+      "x": 494,
+      "w": 74,
+      "h": 91,
       "anchor": [
-        44,
-        81
+        37,
+        80
       ]
     },
     {
-      "x": 610,
+      "x": 568,
+      "w": 74,
+      "h": 91,
+      "anchor": [
+        37,
+        80
+      ]
+    },
+    {
+      "x": 642,
       "w": 88,
-      "h": 95,
+      "h": 96,
       "anchor": [
         44,
-        81
+        82
+      ]
+    },
+    {
+      "x": 730,
+      "w": 88,
+      "h": 96,
+      "anchor": [
+        44,
+        82
+      ]
+    },
+    {
+      "x": 818,
+      "w": 88,
+      "h": 96,
+      "anchor": [
+        44,
+        82
+      ]
+    },
+    {
+      "x": 906,
+      "w": 88,
+      "h": 96,
+      "anchor": [
+        44,
+        82
+      ]
+    },
+    {
+      "x": 994,
+      "w": 88,
+      "h": 96,
+      "anchor": [
+        44,
+        82
+      ]
+    },
+    {
+      "x": 1082,
+      "w": 88,
+      "h": 96,
+      "anchor": [
+        44,
+        82
+      ]
+    },
+    {
+      "x": 1170,
+      "w": 88,
+      "h": 96,
+      "anchor": [
+        44,
+        82
+      ]
+    },
+    {
+      "x": 1258,
+      "w": 88,
+      "h": 96,
+      "anchor": [
+        44,
+        82
       ]
     }
   ],
@@ -130,19 +202,27 @@
         1,
         2,
         3,
-        4
-      ],
-      "fps": 8.0,
-      "speed": 1.4
-    },
-    "correr": {
-      "cols": [
+        4,
         5,
         6,
         7,
         8
       ],
-      "fps": 10.0,
+      "fps": 16.0,
+      "speed": 1.4
+    },
+    "correr": {
+      "cols": [
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "fps": 20.0,
       "speed": 4.0
     }
   },

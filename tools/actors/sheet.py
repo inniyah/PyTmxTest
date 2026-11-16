@@ -28,7 +28,7 @@ from engine import png16
 from tools.pieces.render import DEFAULT_PROJECTION, Projection
 
 from .body import EQUIPMENT, FALLBACK, Proportions, standing_height
-from .poses import POSES, TIMING, animation
+from .poses import DEFAULT_SMOOTHING, POSES, TIMING, animation, inbetween
 from .render import LIGHT, Frame, far_side, render_frame, view_dir
 
 DIRECTIONS = 8
@@ -183,7 +183,23 @@ def animation_poses(desc: dict):
     if unknown:
         raise ValueError(f"Animaciones desconocidas: {unknown} (hay {sorted(POSES)})")
     armed = "fusil" in equipment_of(desc)
-    return [(a, animation(a, armed)) for a in names]
+    factor = smoothing_of(desc)
+    out = []
+    for a in names:
+        poses = animation(a, armed)
+        if a in TIMING and TIMING[a][2]:                 # las que se repiten: con intermedias
+            poses = inbetween(poses, factor)
+        out.append((a, poses))
+    return out
+
+
+def smoothing_of(desc: dict) -> int:
+    """Fotogramas por pose clave en las animaciones que se repiten (``suavizado``; 1 = sin
+    intermedias)."""
+    factor = int(desc.get("suavizado", DEFAULT_SMOOTHING))
+    if factor < 1:
+        raise ValueError(f"suavizado debe ser 1 o más, no {factor}")
+    return factor
 
 
 def build_sheet(desc: dict, proj: Projection = None, progress=None, pitch=None):
@@ -211,7 +227,7 @@ def build_sheet(desc: dict, proj: Projection = None, progress=None, pitch=None):
         entry = {"cols": list(range(col, col + len(poses)))}
         if name in TIMING:
             fps, speed, loop = TIMING[name]
-            entry["fps"] = fps
+            entry["fps"] = fps * (smoothing_of(desc) if loop else 1)      # el ciclo dura lo mismo
             if speed is not None:
                 entry["speed"] = speed
             if not loop:

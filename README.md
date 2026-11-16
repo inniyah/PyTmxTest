@@ -371,7 +371,11 @@ posición, superficie (si algo es metálico) y disposición, en 8 direcciones. L
   hacia donde mira;
 - `animaciones` además de `quieto`: `andar`, `correr`, `agachado`, `andar_agachado`, `granada`, `morir`;
 - opcional, `camara`: `{"inclinacion": 30}`, los grados sobre el suelo desde los que se le ve;
-- opcional, `ropa`: los materiales recoloreables por personaje, en orden (ver abajo).
+- opcional, `ropa`: los materiales recoloreables por personaje, en orden (ver abajo);
+- opcional, `suavizado`: fotogramas por pose clave en las animaciones que se repiten (andar,
+  correr, andar agachado). Por defecto 2: entre cada par de poses clave se intercala la intermedia
+  (las poses son ángulos, así que se interpolan) y se duplican los fotogramas por segundo, así
+  que el ciclo dura lo mismo pero se ve más suave. 1, como antes; granada y morir no cambian.
 
 **La cámara.** Por defecto, 30°: se ve al personaje más de frente que al mundo (unos 46°), más
 erguido y con las piernas más largas. Con `--pitch` (o `camara.inclinacion`) se prueba otra; con

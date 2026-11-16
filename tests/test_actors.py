@@ -493,3 +493,41 @@ def test_a_green_vest_paints_the_vest_green(levels, tmp_path):
             assert counts[lighting, "#00ff00"] > 300 and counts[lighting, None] < 20
     finally:
         v.close()
+
+
+# --- Fotogramas intermedios ------------------------------------------------------------------
+
+def test_blend_interpolates_angles_and_keeps_flags():
+    from tools.actors.body import pose
+    from tools.actors.poses import blend
+    a = pose(thigh_r=0.2, aim=True, throw=(0.0, 1.0))
+    b = pose(thigh_r=0.6, aim=False, throw=(1.0, 3.0), bob=2.0)
+    m = blend(a, b, 0.5)
+    assert m["thigh_r"] == pytest.approx(0.4) and m["bob"] == pytest.approx(1.0)
+    assert m["throw"] == pytest.approx((0.5, 2.0)) and m["aim"] is True
+    assert blend(pose(), pose(), 0.3)["throw"] is None
+
+
+def test_inbetween_closes_the_cycle_only_when_it_loops():
+    from tools.actors.poses import inbetween
+    keys = [{"x": 0.0}, {"x": 1.0}, {"x": 3.0}]
+    looped = inbetween(keys, 2)
+    assert [p["x"] for p in looped] == [0.0, 0.5, 1.0, 2.0, 3.0, 1.5]      # 3 -> 0 cierra el ciclo
+    assert [p["x"] for p in inbetween(keys, 2, loop=False)] == [0.0, 0.5, 1.0, 2.0, 3.0]
+    assert len(inbetween(keys, 3)) == 9 and inbetween(keys, 1) == keys
+
+
+def test_smoothing_doubles_frames_and_speed_but_not_the_cycle():
+    from tools.actors.poses import TIMING
+    from tools.actors.sheet import animation_poses, smoothing_of
+    desc = {"animaciones": ["andar", "correr", "morir"]}
+    n = dict((name, len(poses)) for name, poses in animation_poses(desc))
+    assert smoothing_of(desc) == 2 and n["andar"] == 8 and n["correr"] == 8 and n["morir"] == 4
+    assert dict((k, len(p)) for k, p in animation_poses({**desc, "suavizado": 1}))["andar"] == 4
+    with pytest.raises(ValueError):
+        smoothing_of({"suavizado": 0})
+    from engine.viewer import ASSETS
+    layout = json.loads((ASSETS / "actors/sheets/maniqui.json").read_text(encoding="utf-8"))
+    walk = layout["animations"]["andar"]
+    assert len(walk["cols"]) == 8 and walk["fps"] == 2 * TIMING["andar"][0]
+    assert len(walk["cols"]) / walk["fps"] == pytest.approx(4 / TIMING["andar"][0])    # mismo ciclo

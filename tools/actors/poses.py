@@ -96,6 +96,39 @@ TIMING = {
 }
 
 
+DEFAULT_SMOOTHING = 2       # fotogramas por cada pose clave en las animaciones que se repiten
+
+
+def blend(a: dict, b: dict, t: float) -> dict:
+    """La pose a una fracción ``t`` del camino de ``a`` a ``b``: los ángulos y el balanceo,
+    linealmente; el lanzamiento, componente a componente; si apunta, como ``a``."""
+    out = {}
+    for key, va in a.items():
+        vb = b[key]
+        if isinstance(va, bool) or va is None or vb is None:
+            out[key] = va
+        elif isinstance(va, tuple):
+            out[key] = tuple(x + (y - x) * t for x, y in zip(va, vb))
+        else:
+            out[key] = va + (vb - va) * t
+    return out
+
+
+def inbetween(poses: list, factor: int, loop: bool = True) -> list:
+    """Intercala ``factor - 1`` poses intermedias entre cada par de poses seguidas (y, si se
+    repite, entre la última y la primera, que cierra el ciclo)."""
+    if factor <= 1 or len(poses) < 2:
+        return list(poses)
+    out = []
+    n = len(poses)
+    for i, a in enumerate(poses):
+        out.append(a)
+        if i + 1 < n or loop:
+            b = poses[(i + 1) % n]
+            out += [blend(a, b, k / factor) for k in range(1, factor)]
+    return out
+
+
 def animation(name: str, armed: bool):
     """Poses de una animación; con fusil, la versión armada si la hay."""
     if armed and name in ARMED:
