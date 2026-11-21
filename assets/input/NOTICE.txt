@@ -1,0 +1,5 @@
+gamecontrollerdb.txt: SDL_GameControllerDB, la base de datos de asignaciones de mandos de la
+comunidad de SDL (https://github.com/mdqinc/SDL_GameControllerDB), con licencia zlib, que permite
+usarla y redistribuirla, también en productos comerciales. GLFW la usa para reconocer los mandos y
+darles la disposición estándar tipo Xbox. Para actualizarla, sustituir el archivo por la versión
+más reciente del repositorio.

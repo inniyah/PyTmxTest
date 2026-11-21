@@ -11,6 +11,10 @@ personaje (fachada, círculo, planta entera o nada) · L: iluminación sí/no ·
 K: farol · E: usar · X: silueta del jugador · H: halo del brillo propio · T: tinte por altura · G: tinte por material del suelo · P: profundidad por píxel ·
 M: sin mapas de albedo y normales
 (diagnóstico de rendimiento) · Inicio: centrar · ESC: salir.
+
+Mando (si hay; también si se conecta después): stick izquierdo o cruceta andar (el stick es
+analógico: poco inclinado, anda; a fondo, corre) · A saltar · X usar · stick derecho mover la
+vista (clic: volver a seguir al personaje) · LB / RB alejar / acercar.
 """
 
 import argparse
@@ -28,6 +32,7 @@ from tmx_explorer import __version__
 from engine.entities.world_sim import PHYSICS_HZ, ActorSim
 from engine.events import EventSystem
 from engine.render.gpu_timer import GpuTimer
+from engine.input import GamepadManager
 from engine.render.bloom import Bloom
 from engine.render.overlay import TextOverlay
 from engine.render.sprites import (
@@ -40,6 +45,8 @@ from engine.world.view import WorldView
 
 PAN_SPEED = 900.0            # px de pantalla por segundo
 KEY_ZOOM = 1.25
+PAD_ZOOM = 1.8               # con LB/RB: factor de zoom por segundo
+PAD_LOOK = 1.2               # stick derecho: la vista se mueve a PAN_SPEED por esto
 FOLLOW_RATE = 8.0            # 1/s: lo deprisa que la cámara alcanza al personaje
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 CUT_MODES = ("fachada", "círculo", "planta", "no")   # cómo se oculta lo que tapa al personaje
@@ -124,6 +131,7 @@ class Viewer:
         if npcs:
             self.spawn_npcs(npcs)
         self.follow = player
+        self.gamepad = GamepadManager()        # mando, si hay (también si se conecta después)
         self.cut_mode = 0
         self.night = False
         self.lantern = True
@@ -290,6 +298,14 @@ class Viewer:
             self.camera.width, self.camera.height = width, height
 
     def _direction(self):
+        """Hacia dónde quiere ir (X este, Z sur; pantalla arriba = norte): el mando si se está
+        usando (su stick es analógico: poco inclinado, anda; a fondo, corre), si no, el teclado."""
+        pad = self.gamepad
+        if pad.is_connected():
+            dx, dy = pad.get_movement()
+            n = float(np.hypot(dx, dy))
+            if n > 1e-3:
+                return (dx / n, dy / n) if n > 1.0 else (dx, dy)
         k = self.keys
         dx = (glfw.KEY_D in k or glfw.KEY_RIGHT in k) - (glfw.KEY_A in k or glfw.KEY_LEFT in k)
         dy = (glfw.KEY_S in k or glfw.KEY_DOWN in k) - (glfw.KEY_W in k or glfw.KEY_UP in k)
@@ -297,10 +313,34 @@ class Viewer:
 
     # --- Simulación ---
 
+    def read_gamepad(self, dt):
+        """El mando, si hay: botones (A saltar, X usar, clic del stick derecho seguir al jugador),
+        zoom con LB/RB y vista con el stick derecho. El movimiento lo lee _direction."""
+        pad = self.gamepad
+        pad.update()
+        if not pad.is_connected():
+            return
+        if self.player is not None:
+            if pad.button_just_pressed("a"):
+                self.player.request_jump()
+            if pad.button_just_pressed("x"):
+                self._use = True
+            if pad.button_just_pressed("right_stick"):
+                self.follow = True
+        zoom = pad.get_zoom()
+        if zoom:
+            self.camera.zoom_at(PAD_ZOOM ** (zoom * dt), self.camera.width / 2, self.camera.height / 2)
+        lx, ly = pad.get_look()
+        if lx or ly:
+            self.follow = False
+            self.camera.x += lx * PAN_SPEED * PAD_LOOK * dt / self.camera.zoom
+            self.camera.y += ly * PAN_SPEED * PAD_LOOK * dt / self.camera.zoom
+
     def update(self, dt, wish=None):
         """Avanza comportamiento + física a paso fijo, la animación y la cámara."""
         t = self.table
         player = self.player
+        self.read_gamepad(dt)
         if player is None:
             dx, dy = self._direction()
             self.camera.x += dx * PAN_SPEED * dt / self.camera.zoom
@@ -784,6 +824,7 @@ class Viewer:
                     f"{self.routine_text()}, "
                     f"simulación {self.sim_ms:.1f} ms · {self.timing_text()} · "
                     f"chunks {len(self.view.loaded)} · zoom {self.camera.zoom:.2f} · "
+                    f"{'mando · ' if self.gamepad.is_connected() else ''}"
                     f"planta máx {r.max_level}{extra} · ocultar encima: {CUT_MODES[self.cut_mode]}"
                     f"{' (activo)' if r.cut_level is not None else ''}"
                     f" · luz {'de noche' if self.night else 'de día'}{'' if r.lighting.enabled else ' (apagada)'}"

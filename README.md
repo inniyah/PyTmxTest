@@ -95,6 +95,20 @@ python -m engine.viewer MUNDO.cworld [opciones]
 | Inicio | Centrar la vista |
 | ESC | Salir |
 
+**Con mando** (Xbox, PlayStation, Switch y la mayoría de mandos USB: los reconoce la base de datos
+de SDL incluida en `assets/input/`; también si se conecta con el visor abierto):
+
+| Mando | Acción |
+|---|---|
+| Stick izquierdo / cruceta | Andar; el stick es analógico: poco inclinado, anda; a fondo, corre |
+| A | Saltar |
+| X | Usar (sucesos con `when = use`) |
+| Stick derecho | Mover la vista (deja de seguir al personaje) |
+| Clic del stick derecho | Volver a seguir al personaje |
+| LB / RB | Alejar / acercar |
+
+El teclado sigue funcionando a la vez: si el stick está quieto, manda el teclado.
+
 | Opción | |
 |---|---|
 | `--player-type T` | Tipo del jugador, de `types.json` (por ejemplo, `soldado`) |
@@ -502,6 +516,7 @@ engine/                     El motor
   entities/                 Tipos de personaje, tabla de personajes, paseo, rutinas, simulación por zonas
   nav/                      Grafo de navegación, costes, caminos mínimos, campos de flujo, lugares
   events/                   Sucesos: su pequeño lenguaje (acciones y condiciones) y el sistema en el juego
+  input/                    Mandos (vía GLFW, con la base de datos de SDL)
   viewer.py                 Visor: python -m engine.viewer
 tools/pieces/               Catálogo de piezas, render oblicuo, tileset y mapas de prueba (terreno incluido)
 tools/actors/               Personajes generados: cuerpo, poses, render con la cámara del motor, hojas
